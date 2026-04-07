@@ -214,32 +214,49 @@ def parse_bulk_odds(raw_text: str):
         token=st.secrets["HF_TOKEN"]
     )
     
-    # We tell the AI to give us a specific format we can "regex" easily
-    prompt = f"<|system|>\nExtract matches. Format exactly as: Home vs Away | Odds. One per line.\n<|user|>\n{raw_text}\n<|assistant|>"
+    # Simpler, direct prompt to avoid "empty" responses
+    prompt = f"User wants to extract betting matches. \nText: {raw_text}\n\nFormat as 'Home vs Away | Odds'. List them now:"
     
     try:
-        response = client.text_generation(prompt, max_new_tokens=500)
+        response = client.text_generation(
+            prompt, 
+            max_new_tokens=500,
+            temperature=0.1, # Keep it strictly focused
+            stop_sequences=["\n\n"]
+        )
         
+        # If AI returns nothing, we return an empty list gracefully
+        if not response or not response.strip():
+            st.warning("AI was unable to read that format. Try pasting in a simpler list.")
+            return []
+
         parsed_matches = []
-        # Logic to turn text lines into "Match Objects"
         for line in response.strip().split('\n'):
-            if "vs" in line and "|" in line:
-                # Split "Home vs Away | 1.50"
-                teams_part, odds_part = line.split('|')
-                home, away = teams_part.split('vs')
-                
-                # We use a simple Class or Dictionary to store the data
-                class Match:
-                    def __init__(self, h, a, o):
-                        self.home_team = h.strip()
-                        self.away_team = a.strip()
-                        self.odds = o.strip()
-                
-                parsed_matches.append(Match(home, away, odds_part))
+            # More flexible parsing to handle different AI output styles
+            if " vs " in line.lower():
+                try:
+                    # Clean up the line
+                    line = line.replace("-", "|").replace(":", "|")
+                    parts = line.split("|")
+                    teams_part = parts[0]
+                    odds_part = parts[1] if len(parts) > 1 else "1.00"
+                    
+                    home, away = re.split(r' vs ', teams_part, flags=re.IGNORECASE)
+                    
+                    class Match:
+                        def __init__(self, h, a, o):
+                            self.home_team = h.strip()
+                            self.away_team = a.strip()
+                            self.odds = o.strip()
+                    
+                    parsed_matches.append(Match(home, away, odds_part))
+                except:
+                    continue # Skip lines that don't fit the format
         
         return parsed_matches 
     except Exception as e:
-        st.error(f"AI Parsing Error: {e}")
+        # This will now show the actual technical error if it's not just "empty"
+        st.error(f"Hugging Face Connection Error: {e}")
         return []
 
 if st.button("Analyze All Matches"):
