@@ -13,7 +13,7 @@ HF_TOKEN = st.secrets["HF_TOKEN"]
 
 # Initialize Airtable
 api = Api(AIRTABLE_API_KEY)
-table = api.table(AIRTABLE_BASE_ID, 'Table Name')
+table = api.table(AIRTABLE_BASE_ID, 'Footballpro')
 
 # Load the trained model
 with open('football_model.pkl', 'rb') as f:
