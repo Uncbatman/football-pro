@@ -4,4 +4,4 @@ scikit-learn
 pyairtable
 requests
 instructor
-groq
+huggingface_hub

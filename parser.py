@@ -1,14 +1,12 @@
 from typing import List
 
-import streamlit as st
-from groq import Groq
 from pydantic import BaseModel, Field
-
-# Initialize Groq client
-client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+from huggingface_hub import InferenceClient
+import streamlit as st
 
 
 class SingleMatch(BaseModel):
+    """Represents a single match with odds."""
     home_team: str
     away_team: str
     home_odds: float = Field(description="Decimal odds for home win")
@@ -17,19 +15,31 @@ class SingleMatch(BaseModel):
 
 
 class MatchList(BaseModel):
+    """List of matches with odds."""
     matches: List[SingleMatch]
 
 
-def parse_bulk_odds(raw_text: str) -> List[SingleMatch]:
-    """Extract match data and odds from raw text using Groq API."""
-    return client.chat.completions.create(
-        model="gpt-4o-mini",
-        response_model=MatchList,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a betting data extractor. Convert the following messy text into a structured list of matches and their 1X2 decimal odds.",
-            },
-            {"role": "user", "content": raw_text},
-        ],
-    ).matches
+def get_hf_client() -> InferenceClient:
+    """Initialize and return HuggingFace Inference client."""
+    return InferenceClient(
+        "meta-llama/Llama-3.2-3B-Instruct",
+        token=st.secrets["HF_TOKEN"]
+    )
+
+
+def parse_bulk_odds(raw_text: str) -> str:
+    """
+    Extract match data and odds from raw text using HuggingFace Llama model.
+
+    Args:
+        raw_text: Messy text containing match and odds information
+
+    Returns:
+        JSON string with extracted match data
+    """
+    client = get_hf_client()
+    response = client.text_generation(
+        f"Extract match data into JSON: {raw_text}",
+        max_new_tokens=500,
+    )
+    return response

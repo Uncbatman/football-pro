@@ -19,30 +19,55 @@ with open('football_model.pkl', 'rb') as f:
 
 # --- Helper: Feature Extraction ---
 def get_team_stats(team_name, team_records, stats_records):
+    """
+    Fetches stats from Airtable. 
+    If team is missing or has no history, returns League Averages (1.3 scored, 1.2 conceded).
+    """
+    # Standard EPL averages as a fallback safety net
+    LEAGUE_AVG_SCORED = 1.35 
+    LEAGUE_AVG_CONCEDED = 1.35
+
     try:
-        # Find the Airtable ID
-        team_id = next(r['id'] for r in team_records if r['fields'].get('Team Name') == team_name)
+        # 1. Find the Airtable ID for the team name
+        # We use .lower() to handle spelling/case sensitivity issues
+        team_id = next(
+            (r['id'] for r in team_records 
+             if r['fields'].get('Team Name', '').lower() == team_name.lower()), 
+            None
+        )
+        
+        if not team_id:
+            return LEAGUE_AVG_SCORED, LEAGUE_AVG_CONCEDED
         
         relevant_matches = []
         for r in stats_records:
             f = r['fields']
+            # Home matches
             if team_id in f.get('Home Team', []):
-                relevant_matches.append({'scored': f['Home Goals'], 'conceded': f['Away Goals']})
+                relevant_matches.append({
+                    'scored': f.get('Home Goals', 0), 
+                    'conceded': f.get('Away Goals', 0)
+                })
+            # Away matches
             elif team_id in f.get('Away Team', []):
-                relevant_matches.append({'scored': f['Away Goals'], 'conceded': f['Home Goals']})
+                relevant_matches.append({
+                    'scored': f.get('Away Goals', 0), 
+                    'conceded': f.get('Home Goals', 0)
+                })
         
-        # If less than 3 matches, use league averages
-        if len(relevant_matches) < 3:
-            return 1.3, 1.2
+        # 2. Check if we have enough data (at least 2 matches)
+        if len(relevant_matches) < 2:
+            return LEAGUE_AVG_SCORED, LEAGUE_AVG_CONCEDED
             
         avg_scored = sum(m['scored'] for m in relevant_matches) / len(relevant_matches)
         avg_conceded = sum(m['conceded'] for m in relevant_matches) / len(relevant_matches)
+        
         return avg_scored, avg_conceded
 
-    except StopIteration:
-        # Return league averages if team not found
-        return 1.3, 1.2
-
+    except Exception as e:
+        # If anything else goes wrong, don't crash the app
+        st.sidebar.warning(f"Using default stats for {team_name} due to data gap.")
+        return LEAGUE_AVG_SCORED, LEAGUE_AVG_CONCEDED
 
 # --- Market Odds ---
 def get_mock_market_odds():
