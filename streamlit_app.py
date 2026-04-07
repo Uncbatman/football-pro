@@ -1,17 +1,14 @@
-import pickle
-
-import pandas as pd
 import streamlit as st
 from pyairtable import Api
 
-from parser import parse_bulk_odds
+# Accessing secrets securely
+AIRTABLE_API_KEY = st.secrets["AIRTABLE_API_KEY"]
+AIRTABLE_BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
+HF_TOKEN = st.secrets["HF_TOKEN"]
 
-# --- Configuration ---
-AIRTABLE_API_KEY = 'patRV0Ftx6TwcR9M5.64e8132bb75468b3e7f34113c0c304717cb6e84215755d20bb09ee582514f117'
-AIRTABLE_BASE_ID = 'appEKWpp4qIrJkZS1'
+# Initialize Airtable with secrets
 api = Api(AIRTABLE_API_KEY)
-teams_table = api.table(AIRTABLE_BASE_ID, 'Teams')
-stats_table = api.table(AIRTABLE_BASE_ID, 'Historical Stats')
+table = api.table(AIRTABLE_BASE_ID, 'Table Name')
 
 # Load the trained Model
 with open('football_model.pkl', 'rb') as f:
