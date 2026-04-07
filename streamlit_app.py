@@ -24,7 +24,7 @@ with open('football_model.pkl', 'rb') as f:
 # ============================================================================
 
 
-def get_team_stats(team_name, team_records, stats_records):
+def get_team_stats(team_name, teams_table, stats_records):
     """
     Fetches team stats from Airtable.
     
@@ -33,7 +33,7 @@ def get_team_stats(team_name, team_records, stats_records):
     
     Args:
         team_name (str): Name of the team
-        team_records (list): Team records from Airtable
+        teams_table (list): Team records from Airtable
         stats_records (list): Match statistics from Airtable
         
     Returns:
@@ -45,7 +45,7 @@ def get_team_stats(team_name, team_records, stats_records):
     try:
         # Find the Airtable ID for the team name (case-insensitive)
         team_id = next(
-            (r['id'] for r in team_records 
+            (r['id'] for r in teams_table 
              if r['fields'].get('Team Name', '').lower() == team_name.lower()), 
             None
         )
@@ -105,10 +105,10 @@ st.set_page_config(page_title="AI Football Odds Tool", layout="centered")
 st.title("⚽ AI-Powered Match Predictor")
 
 # Fetch data from Airtable
-team_records = table.all()
+teams_table = table.all()
 stats_records = table.all()
 team_names = sorted(
-    [r["fields"]["Team Name"] for r in team_records 
+    [r["fields"]["Team Name"] for r in teams_table 
      if "Team Name" in r["fields"]]
 )
 
@@ -122,8 +122,8 @@ with col2:
 # --- Match Analysis ---
 if st.button("Analyze Match"):
     # Get team statistics from Airtable
-    home_avg_scored, _ = get_team_stats(home_team, team_records, stats_records)
-    _, away_avg_conceded = get_team_stats(away_team, team_records, stats_records)
+    home_avg_scored, _ = get_team_stats(home_team, teams_table, stats_records)
+    _, away_avg_conceded = get_team_stats(away_team, teams_table, stats_records)
 
     # Generate predictions
     input_data = pd.DataFrame(
@@ -212,8 +212,8 @@ if st.button("Analyze All Matches"):
         
         for match in matches:
             # Fetch team statistics from Airtable
-            h_scored, _ = get_team_stats(match.home_team, team_records, stats_records)
-            _, a_conceded = get_team_stats(match.away_team, team_records, stats_records)
+            h_scored, _ = get_team_stats(match.home_team, teams_table, stats_records)
+            _, a_conceded = get_team_stats(match.away_team, teams_table, stats_records)
 
             # Run prediction model
             input_df = pd.DataFrame(
