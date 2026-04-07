@@ -106,65 +106,67 @@ def get_mock_market_odds():
     """
     return [2.10, 3.40, 3.80]
 
-
 import re
+import requests
 
 def parse_bulk_odds(raw_text: str):
     if not raw_text.strip():
         return []
 
-    client = InferenceClient(
-        model="meta-llama/Llama-3.2-3B-Instruct", 
-        token=st.secrets["HF_TOKEN"]
-    )
-    
-    # A "Zero-Nonsense" prompt
-    prompt = f"Extract football games from this text. Format: Team A vs Team B | Odds. Text: {raw_text}"
-    
+    # 1. Check if token exists in secrets
     try:
-        response = client.text_generation(prompt, max_new_tokens=300, temperature=0.1)
+        token = st.secrets["HF_TOKEN"]
+    except KeyError:
+        st.error("HF_TOKEN is missing from Streamlit Secrets!")
+        return []
+
+    # 2. Use a smaller, faster model to avoid timeouts
+    model_id = "meta-llama/Llama-3.2-1B-Instruct"
+    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {
+        "inputs": f"Extract matches as 'Home vs Away | Odds'. Text: {raw_text}",
+        "parameters": {"max_new_tokens": 200, "temperature": 0.1}
+    }
+
+    try:
+        response = requests.post(api_url, headers=headers, json=payload, timeout=10)
         
-        # DEBUG: See what the AI actually said
-        with st.expander("Show AI Raw Response"):
-            st.write(response)
+        # This will show you exactly what Hugging Face is saying (e.g., 401 for bad token)
+        if response.status_code != 200:
+            st.error(f"HF Error {response.status_code}: {response.text}")
+            return []
+
+        result = response.json()
+        # Handle different response formats from HF
+        ai_text = result[0].get('generated_text', '') if isinstance(result, list) else result.get('generated_text', '')
 
         parsed_matches = []
-        # Split by newlines or periods
-        lines = re.split(r'\n|\.', response)
-        
-        for line in lines:
-            # We look for 'vs' anywhere in the line
+        for line in ai_text.strip().split('\n'):
             if " vs " in line.lower():
                 try:
-                    # Remove common junk words the AI might add
-                    clean_line = line.replace("*", "").replace("-", "|").strip()
+                    # Very simple splitting logic
+                    parts = line.replace("-", "|").split("|")
+                    teams = parts[0]
+                    odds = parts[1] if len(parts) > 1 else "1.00"
                     
-                    # Split into teams and odds
-                    if "|" in clean_line:
-                        teams_part = clean_line.split("|")[0]
-                        odds_part = clean_line.split("|")[1]
-                    else:
-                        teams_part = clean_line
-                        odds_part = "1.00"
-
-                    # Split the two teams
-                    home, away = re.split(r' vs ', teams_part, flags=re.IGNORECASE)
+                    h, a = re.split(r' vs ', teams, flags=re.IGNORECASE)
                     
                     class Match:
                         def __init__(self, h, a, o):
                             self.home_team = h.strip()
                             self.away_team = a.strip()
-                            # Find the first number in the odds string
-                            nums = re.findall(r"\d+\.\d+|\d+", o)
-                            self.odds = float(nums[0]) if nums else 1.00
+                            self.odds = o.strip()
                     
-                    parsed_matches.append(Match(home, away, odds_part))
+                    parsed_matches.append(Match(h, a, odds))
                 except:
-                    continue 
+                    continue
+        
+        return parsed_matches
 
-        return parsed_matches 
     except Exception as e:
-        st.error(f"Hugging Face Connection Failed: {e}")
+        st.error(f"Connection Failed: {e}")
         return []
 
         parsed_matches = []
