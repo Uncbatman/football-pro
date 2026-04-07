@@ -237,6 +237,15 @@ if st.button("Analyze All Matches"):
         # Display results in table format
         st.table(pd.DataFrame(results_data))
 
+        # TEMPORARY DEBUG BLOCK
+try:
+    team_records = teams_table.all()
+    st.success("Airtable Connection Successful!")
+except Exception as e:
+    st.error(f"Airtable Error: {e}")
+    # This will print the actual 401, 403, or 404 code
+    st.stop()
+
 
 # ============================================================================
 # DISCLAIMER
