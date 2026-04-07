@@ -2,6 +2,7 @@ import streamlit as st
 import pickle
 import pandas as pd
 from pyairtable import Api
+from huggingface_hub import InferenceClient
 
 # ============================================================================
 # CONFIGURATION & SECRETS
