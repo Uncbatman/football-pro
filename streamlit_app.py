@@ -203,6 +203,27 @@ st.divider()
 st.title("🚀 Bulk Match Analyzer")
 
 raw_input = st.text_area("Paste match list here (Team names and odds):", height=200)
+def parse_bulk_odds(raw_text: str):
+    """
+    Uses Hugging Face Llama-3 to extract match names and odds from raw text.
+    """
+    if not raw_text.strip():
+        return []
+
+    client = InferenceClient(
+        model="meta-llama/Llama-3.2-3B-Instruct", 
+        token=st.secrets["HF_TOKEN"]
+    )
+    
+    prompt = f"<|system|>\nExtract matches and decimal odds into a clean list. Format: Team A vs Team B - 1.50\n<|user|>\n{raw_text}\n<|assistant|>"
+    
+    try:
+        response = client.text_generation(prompt, max_new_tokens=500)
+        # For now, we return the raw string to check if it's working
+        return response 
+    except Exception as e:
+        st.error(f"AI Parsing Error: {e}")
+        return "Error parsing data."
 
 if st.button("Analyze All Matches"):
     with st.spinner("AI is organizing the data..."):
