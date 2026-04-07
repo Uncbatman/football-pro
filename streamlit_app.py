@@ -118,58 +118,53 @@ def parse_bulk_odds(raw_text: str):
         token=st.secrets["HF_TOKEN"]
     )
     
-    # We force the AI to only output the structured data
-    prompt = f"""Task: Extract football matches and odds.
-Format: Home vs Away | Odds
-Example: Arsenal vs Chelsea | 1.85
-Text: {raw_text}
-Output:"""
+    # A "Zero-Nonsense" prompt
+    prompt = f"Extract football games from this text. Format: Team A vs Team B | Odds. Text: {raw_text}"
     
     try:
-        response = client.text_generation(
-            prompt, 
-            max_new_tokens=500,
-            temperature=0.1
-        )
+        response = client.text_generation(prompt, max_new_tokens=300, temperature=0.1)
         
+        # DEBUG: See what the AI actually said
+        with st.expander("Show AI Raw Response"):
+            st.write(response)
+
         parsed_matches = []
-        # Split by lines and clean each one
-        lines = response.strip().split('\n')
+        # Split by newlines or periods
+        lines = re.split(r'\n|\.', response)
         
         for line in lines:
-            line = line.strip()
-            # Look for a pattern that looks like "Team A vs Team B"
+            # We look for 'vs' anywhere in the line
             if " vs " in line.lower():
                 try:
-                    # Logic to handle different separators (| , - or spaces)
-                    clean_line = line.replace(" - ", " | ").replace(":", " | ")
+                    # Remove common junk words the AI might add
+                    clean_line = line.replace("*", "").replace("-", "|").strip()
                     
+                    # Split into teams and odds
                     if "|" in clean_line:
-                        teams_part, odds_part = clean_line.split("|")[:2]
+                        teams_part = clean_line.split("|")[0]
+                        odds_part = clean_line.split("|")[1]
                     else:
                         teams_part = clean_line
-                        odds_part = "1.00" # Fallback odds
+                        odds_part = "1.00"
 
+                    # Split the two teams
                     home, away = re.split(r' vs ', teams_part, flags=re.IGNORECASE)
                     
-                    # Create the Match Object
                     class Match:
                         def __init__(self, h, a, o):
                             self.home_team = h.strip()
                             self.away_team = a.strip()
-                            try:
-                                # Ensure odds is a clean float
-                                self.odds = float(re.findall(r"\d+\.\d+", o)[0])
-                            except:
-                                self.odds = 1.00
+                            # Find the first number in the odds string
+                            nums = re.findall(r"\d+\.\d+|\d+", o)
+                            self.odds = float(nums[0]) if nums else 1.00
                     
-                    parsed_matches.append(Match(home, away, str(odds_part)))
-                except Exception as e:
-                    continue # Skip lines that don't match
+                    parsed_matches.append(Match(home, away, odds_part))
+                except:
+                    continue 
 
         return parsed_matches 
     except Exception as e:
-        st.error(f"HF Error: {e}")
+        st.error(f"Hugging Face Connection Failed: {e}")
         return []
 
         parsed_matches = []
