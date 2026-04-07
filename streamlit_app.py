@@ -1,30 +1,23 @@
 import streamlit as st
 from pyairtable import Api
 
-# 1. Access Secrets
-try:
-    AT_KEY = st.secrets["AIRTABLE_API_KEY"]
-    AT_BASE = st.secrets["AIRTABLE_BASE_ID"] # Must start with 'app'
-except Exception as e:
-    st.error("Missing secrets in Streamlit settings.")
-    st.stop()
+# 1. Pull from Secrets
+AT_KEY = st.secrets["AIRTABLE_API_KEY"]
+AT_BASE = st.secrets["AIRTABLE_BASE_ID"] # Ensure this is the 'appXXXXXXXX' ID
 
 api = Api(AT_KEY)
 
-# 2. Point to the TABLE (The Tab Name)
-# Change 'Table 1' to the EXACT name of your tab in Airtable
-TABLE_NAME = 'Matches' 
-teams_table_api = api.table(AT_BASE, TABLE_NAME)
+# 2. Define the Table (The Tab Name in Airtable)
+# Use 'Matches' or 'Teams' - whichever tab holds your data
+target_table = api.table(AT_BASE, 'Matches') 
 
+# 3. Fetch the data (This was where line 115 was failing)
 try:
-    # Try a small fetch to test the handshake
-    test_fetch = teams_table_api.first()
-    st.sidebar.success(f"✅ Connected to {TABLE_NAME}")
+    # We use 'target_table' here because that is what we defined above
+    team_records = target_table.all() 
+    st.sidebar.success("✅ Airtable Data Loaded")
 except Exception as e:
-    st.error(f"Handshake Failed.")
-    st.info(f"Double check that {AT_BASE} is the 'app...' ID, not the name 'Footballpro'.")
-    # This prints the raw error to your Streamlit logs
-    print(f"DEBUG: {e}") 
+    st.error(f"Error fetching data: {e}")
     st.stop()
 # ============================================================================
 # HELPER FUNCTIONS
