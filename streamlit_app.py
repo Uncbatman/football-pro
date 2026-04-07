@@ -1,4 +1,7 @@
 import streamlit as st
+import pickle  # <--- Add this line
+import pandas as pd
+import streamlit as st
 from pyairtable import Api
 
 # Accessing secrets securely
