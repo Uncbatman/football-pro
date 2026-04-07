@@ -1,23 +1,29 @@
 import streamlit as st
-import pickle
-import pandas as pd
 from pyairtable import Api
 
-# ============================================================================
-# CONFIGURATION & SECRETS
-# ============================================================================
+# 1. Pull from Secrets (Make sure these names match your Streamlit Secrets exactly!)
+try:
+    AT_KEY = st.secrets["AIRTABLE_API_KEY"]
+    AT_BASE = st.secrets["AIRTABLE_BASE_ID"]
+except KeyError:
+    st.error("Secrets not found! Check your Streamlit Cloud 'Advanced Settings'.")
+    st.stop()
 
-AIRTABLE_API_KEY = st.secrets["AIRTABLE_API_KEY"]
-AIRTABLE_BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
-HF_TOKEN = st.secrets["HF_TOKEN"]
+# 2. Initialize API
+api = Api(AT_KEY)
 
-# Initialize Airtable
-api = Api(AIRTABLE_API_KEY)
-table = api.table(AIRTABLE_BASE_ID, 'Footballpro')
+# 3. Connect to specific tables (Check your Airtable tab names!)
+# If your table is called "Teams", use 'Teams'. If it's 'Table 1', use 'Table 1'.
+teams_table_api = api.table(AT_BASE, 'Team Name') 
 
-# Load the trained model
-with open('football_model.pkl', 'rb') as f:
-    model = pickle.load(f)
+# 4. Fetch the data
+try:
+    team_records = teams_table_api.all()
+    st.sidebar.success("✅ Connected to Airtable")
+except Exception as e:
+    st.error(f"Airtable Connection Failed: {e}")
+    st.info("Check if your Personal Access Token has 'data.records:read' permissions.")
+    st.stop()
 
 # ============================================================================
 # HELPER FUNCTIONS
