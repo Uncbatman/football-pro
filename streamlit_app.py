@@ -107,16 +107,9 @@ def get_mock_market_odds():
     return [2.10, 3.40, 3.80]
 
 
+import re
+
 def parse_bulk_odds(raw_text: str):
-    """
-    Parse match data from bulk text input using Hugging Face AI.
-    
-    Args:
-        raw_text (str): Raw text containing match data
-        
-    Returns:
-        list: List of Match objects
-    """
     if not raw_text.strip():
         return []
 
@@ -125,19 +118,59 @@ def parse_bulk_odds(raw_text: str):
         token=st.secrets["HF_TOKEN"]
     )
     
-    prompt = f"Extract betting matches from this text. Format as 'Home vs Away | Odds'.\nText: {raw_text}\n\nList matches:"
+    # We force the AI to only output the structured data
+    prompt = f"""Task: Extract football matches and odds.
+Format: Home vs Away | Odds
+Example: Arsenal vs Chelsea | 1.85
+Text: {raw_text}
+Output:"""
     
     try:
         response = client.text_generation(
             prompt, 
             max_new_tokens=500,
-            temperature=0.1,
-            stop_sequences=["\n\n"]
+            temperature=0.1
         )
         
-        if not response or not response.strip():
-            st.warning("AI was unable to parse that format. Try a simpler list.")
-            return []
+        parsed_matches = []
+        # Split by lines and clean each one
+        lines = response.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            # Look for a pattern that looks like "Team A vs Team B"
+            if " vs " in line.lower():
+                try:
+                    # Logic to handle different separators (| , - or spaces)
+                    clean_line = line.replace(" - ", " | ").replace(":", " | ")
+                    
+                    if "|" in clean_line:
+                        teams_part, odds_part = clean_line.split("|")[:2]
+                    else:
+                        teams_part = clean_line
+                        odds_part = "1.00" # Fallback odds
+
+                    home, away = re.split(r' vs ', teams_part, flags=re.IGNORECASE)
+                    
+                    # Create the Match Object
+                    class Match:
+                        def __init__(self, h, a, o):
+                            self.home_team = h.strip()
+                            self.away_team = a.strip()
+                            try:
+                                # Ensure odds is a clean float
+                                self.odds = float(re.findall(r"\d+\.\d+", o)[0])
+                            except:
+                                self.odds = 1.00
+                    
+                    parsed_matches.append(Match(home, away, str(odds_part)))
+                except Exception as e:
+                    continue # Skip lines that don't match
+
+        return parsed_matches 
+    except Exception as e:
+        st.error(f"HF Error: {e}")
+        return []
 
         parsed_matches = []
         for line in response.strip().split('\n'):
