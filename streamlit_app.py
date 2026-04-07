@@ -115,33 +115,32 @@ def parse_bulk_odds(raw_text: str):
 
     token = st.secrets["HF_TOKEN"]
     
-    # 1. NEW ROUTER URL
-    api_url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
+    # This is the most stable direct endpoint for Inference
+    api_url = "https://api-inference.huggingface.co/models/meta-llama/Llama-3.2-1B-Instruct"
+    headers = {"Authorization": f"Bearer {token}"}
 
-    # 2. Use the Chat Completion format (The Router prefers this)
+    # Using the standard "inputs" format which is less prone to 404s
     payload = {
-        "model": "meta-llama/Llama-3.2-1B-Instruct",
-        "messages": [
-            {"role": "system", "content": "Extract football matches. Format: Home vs Away | Odds"},
-            {"role": "user", "content": raw_text}
-        ],
-        "max_tokens": 500,
-        "temperature": 0.1
+        "inputs": f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nExtract football matches. Format: Home vs Away | Odds<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{raw_text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>",
+        "parameters": {"max_new_tokens": 500, "return_full_text": False}
     }
 
     try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=10)
+        response = requests.post(api_url, headers=headers, json=payload, timeout=15)
         
         if response.status_code != 200:
-            st.error(f"HF Router Error {response.status_code}: {response.text}")
+            st.error(f"HF Error {response.status_code}: {response.text}")
             return []
 
         result = response.json()
-        ai_text = result['choices'][0]['message']['content']
+        
+        # Accessing the generated text from the standard API response
+        if isinstance(result, list):
+            ai_text = result[0].get('generated_text', '')
+        else:
+            ai_text = result.get('generated_text', '')
+
+        # ... (rest of your regex parsing logic) ...
 
         # ... (keep your existing parsing/regex logic here) ...
         parsed_matches = []
