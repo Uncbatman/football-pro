@@ -1,6 +1,7 @@
 import streamlit as st
 import pickle
 import pandas as pd
+import re
 from pyairtable import Api
 from huggingface_hub import InferenceClient
 
@@ -19,9 +20,18 @@ target_table = api.table(AT_BASE, 'Matches')
 # Load the trained model
 with open('football_model.pkl', 'rb') as f:
     model = pickle.load(f)
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+
+class Match:
+    """Parse match data from bulk input."""
+    def __init__(self, home_team, away_team, home_odds):
+        self.home_team = home_team.strip()
+        self.away_team = away_team.strip()
+        self.home_odds = float(home_odds.strip()) if home_odds else 1.0
 
 
 def get_team_stats(team_name, teams_table, stats_records):
@@ -95,6 +105,60 @@ def get_mock_market_odds():
         In production, connect to Odds API for real-time odds.
     """
     return [2.10, 3.40, 3.80]
+
+
+def parse_bulk_odds(raw_text: str):
+    """
+    Parse match data from bulk text input using Hugging Face AI.
+    
+    Args:
+        raw_text (str): Raw text containing match data
+        
+    Returns:
+        list: List of Match objects
+    """
+    if not raw_text.strip():
+        return []
+
+    client = InferenceClient(
+        model="meta-llama/Llama-3.2-3B-Instruct", 
+        token=st.secrets["HF_TOKEN"]
+    )
+    
+    prompt = f"Extract betting matches from this text. Format as 'Home vs Away | Odds'.\nText: {raw_text}\n\nList matches:"
+    
+    try:
+        response = client.text_generation(
+            prompt, 
+            max_new_tokens=500,
+            temperature=0.1,
+            stop_sequences=["\n\n"]
+        )
+        
+        if not response or not response.strip():
+            st.warning("AI was unable to parse that format. Try a simpler list.")
+            return []
+
+        parsed_matches = []
+        for line in response.strip().split('\n'):
+            if " vs " in line.lower():
+                try:
+                    # Clean up the line
+                    line = line.replace("-", "|").replace(":", "|")
+                    parts = line.split("|")
+                    teams_part = parts[0]
+                    odds_part = parts[1] if len(parts) > 1 else "1.00"
+                    
+                    home, away = re.split(r' vs ', teams_part, flags=re.IGNORECASE)
+                    parsed_matches.append(Match(home, away, odds_part))
+                except:
+                    continue
+        
+        return parsed_matches
+        
+    except Exception as e:
+        st.error(f"Hugging Face Error: {e}")
+        return []
 
 
 # ============================================================================
@@ -203,94 +267,42 @@ st.divider()
 st.title("🚀 Bulk Match Analyzer")
 
 raw_input = st.text_area("Paste match list here (Team names and odds):", height=200)
-import re
-
-def parse_bulk_odds(raw_text: str):
-    if not raw_text.strip():
-        return []
-
-    client = InferenceClient(
-        model="meta-llama/Llama-3.2-3B-Instruct", 
-        token=st.secrets["HF_TOKEN"]
-    )
-    
-    # Simpler, direct prompt to avoid "empty" responses
-    prompt = f"User wants to extract betting matches. \nText: {raw_text}\n\nFormat as 'Home vs Away | Odds'. List them now:"
-    
-    try:
-        response = client.text_generation(
-            prompt, 
-            max_new_tokens=500,
-            temperature=0.1, # Keep it strictly focused
-            stop_sequences=["\n\n"]
-        )
-        
-        # If AI returns nothing, we return an empty list gracefully
-        if not response or not response.strip():
-            st.warning("AI was unable to read that format. Try pasting in a simpler list.")
-            return []
-
-        parsed_matches = []
-        for line in response.strip().split('\n'):
-            # More flexible parsing to handle different AI output styles
-            if " vs " in line.lower():
-                try:
-                    # Clean up the line
-                    line = line.replace("-", "|").replace(":", "|")
-                    parts = line.split("|")
-                    teams_part = parts[0]
-                    odds_part = parts[1] if len(parts) > 1 else "1.00"
-                    
-                    home, away = re.split(r' vs ', teams_part, flags=re.IGNORECASE)
-                    
-                    class Match:
-                        def __init__(self, h, a, o):
-                            self.home_team = h.strip()
-                            self.away_team = a.strip()
-                            self.odds = o.strip()
-                    
-                    parsed_matches.append(Match(home, away, odds_part))
-                except:
-                    continue # Skip lines that don't fit the format
-        
-        return parsed_matches 
-    except Exception as e:
-        # This will now show the actual technical error if it's not just "empty"
-        st.error(f"Hugging Face Connection Error: {e}")
-        return []
 
 if st.button("Analyze All Matches"):
     with st.spinner("AI is organizing the data..."):
         matches = parse_bulk_odds(raw_input)
 
-        results_data = []
-        
-        for match in matches:
-            # Fetch team statistics from Airtable
-            h_scored, _ = get_team_stats(match.home_team, teams_table, stats_records)
-            _, a_conceded = get_team_stats(match.away_team, teams_table, stats_records)
+        if not matches:
+            st.warning("No matches could be parsed.")
+        else:
+            results_data = []
+            
+            for match in matches:
+                # Fetch team statistics from Airtable
+                h_scored, _ = get_team_stats(match.home_team, teams_table, stats_records)
+                _, a_conceded = get_team_stats(match.away_team, teams_table, stats_records)
 
-            # Run prediction model
-            input_df = pd.DataFrame(
-                [[h_scored, a_conceded]], 
-                columns=["home_goals", "away_goals"]
-            )
-            probs = model.predict_proba(input_df)[0]
+                # Run prediction model
+                input_df = pd.DataFrame(
+                    [[h_scored, a_conceded]], 
+                    columns=["home_goals", "away_goals"]
+                )
+                probs = model.predict_proba(input_df)[0]
 
-            # Detect value opportunities (AI_prob > implied_prob)
-            value_home = "Value" if probs[1] > (1 / match.home_odds) else ""
+                # Detect value opportunities (AI_prob > implied_prob)
+                value_home = "Value" if probs[1] > (1 / match.home_odds) else ""
 
-            results_data.append(
-                {
-                    "Match": f"{match.home_team} vs {match.away_team}",
-                    "AI Home Win %": f"{probs[1] * 100:.1f}%",
-                    "Market Odds": match.home_odds,
-                    "Advice": value_home,
-                }
-            )
+                results_data.append(
+                    {
+                        "Match": f"{match.home_team} vs {match.away_team}",
+                        "AI Home Win %": f"{probs[1] * 100:.1f}%",
+                        "Market Odds": match.home_odds,
+                        "Advice": value_home,
+                    }
+                )
 
-        # Display results in table format
-        st.table(pd.DataFrame(results_data))
+            # Display results in table format
+            st.table(pd.DataFrame(results_data))
 
 
 # ============================================================================
