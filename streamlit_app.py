@@ -14,7 +14,7 @@ api = Api(AT_KEY)
 
 # 3. Connect to specific tables (Check your Airtable tab names!)
 # If your table is called "Teams", use 'Teams'. If it's 'Table 1', use 'Table 1'.
-teams_table_api = api.table(AT_BASE, 'Team Name') 
+teams_table_api = api.table(AT_BASE, 'Footballpro') 
 
 # 4. Fetch the data
 try:
