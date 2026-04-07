@@ -2,6 +2,7 @@ import streamlit as st
 import pickle
 import pandas as pd
 import re
+import requests
 from pyairtable import Api
 from huggingface_hub import InferenceClient
 
@@ -106,20 +107,16 @@ def get_mock_market_odds():
     """
     return [2.10, 3.40, 3.80]
 
-import re
-import requests
-
 def parse_bulk_odds(raw_text: str):
     if not raw_text.strip():
         return []
 
     token = st.secrets["HF_TOKEN"]
     
-    # This is the most stable direct endpoint for Inference
-    api_url = "https://api-inference.huggingface.co/models/meta-llama/Llama-3.2-1B-Instruct"
+    # Use the new router endpoint instead of deprecated api-inference
+    api_url = "https://router.huggingface.co/models/meta-llama/Llama-3.2-1B-Instruct"
     headers = {"Authorization": f"Bearer {token}"}
 
-    # Using the standard "inputs" format which is less prone to 404s
     payload = {
         "inputs": f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nExtract football matches. Format: Home vs Away | Odds<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{raw_text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>",
         "parameters": {"max_new_tokens": 500, "return_full_text": False}
@@ -134,32 +131,23 @@ def parse_bulk_odds(raw_text: str):
 
         result = response.json()
         
-        # Accessing the generated text from the standard API response
+        # Extract generated text from response
         if isinstance(result, list):
             ai_text = result[0].get('generated_text', '')
         else:
             ai_text = result.get('generated_text', '')
 
-        # ... (rest of your regex parsing logic) ...
-
-        # ... (keep your existing parsing/regex logic here) ...
+        # Parse matches from AI response
         parsed_matches = []
         for line in ai_text.strip().split('\n'):
             if " vs " in line.lower():
                 try:
-                    # Very simple splitting logic
+                    # Split on pipe or dash
                     parts = line.replace("-", "|").split("|")
                     teams = parts[0]
                     odds = parts[1] if len(parts) > 1 else "1.00"
                     
                     h, a = re.split(r' vs ', teams, flags=re.IGNORECASE)
-                    
-                    class Match:
-                        def __init__(self, h, a, o):
-                            self.home_team = h.strip()
-                            self.away_team = a.strip()
-                            self.odds = o.strip()
-                    
                     parsed_matches.append(Match(h, a, odds))
                 except:
                     continue
@@ -168,27 +156,6 @@ def parse_bulk_odds(raw_text: str):
 
     except Exception as e:
         st.error(f"Connection Failed: {e}")
-        return []
-
-        parsed_matches = []
-        for line in response.strip().split('\n'):
-            if " vs " in line.lower():
-                try:
-                    # Clean up the line
-                    line = line.replace("-", "|").replace(":", "|")
-                    parts = line.split("|")
-                    teams_part = parts[0]
-                    odds_part = parts[1] if len(parts) > 1 else "1.00"
-                    
-                    home, away = re.split(r' vs ', teams_part, flags=re.IGNORECASE)
-                    parsed_matches.append(Match(home, away, odds_part))
-                except:
-                    continue
-        
-        return parsed_matches
-        
-    except Exception as e:
-        st.error(f"Hugging Face Error: {e}")
         return []
 
 
