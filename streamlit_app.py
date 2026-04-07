@@ -1,24 +1,23 @@
 import streamlit as st
+import pickle
+import pandas as pd
 from pyairtable import Api
 
-# 1. Pull from Secrets
+# ============================================================================
+# CONFIGURATION & SECRETS
+# ============================================================================
+
 AT_KEY = st.secrets["AIRTABLE_API_KEY"]
-AT_BASE = st.secrets["AIRTABLE_BASE_ID"] # Ensure this is the 'appXXXXXXXX' ID
+AT_BASE = st.secrets["AIRTABLE_BASE_ID"]
+HF_TOKEN = st.secrets["HF_TOKEN"]
 
+# Initialize Airtable
 api = Api(AT_KEY)
+target_table = api.table(AT_BASE, 'Matches')
 
-# 2. Define the Table (The Tab Name in Airtable)
-# Use 'Matches' or 'Teams' - whichever tab holds your data
-target_table = api.table(AT_BASE, 'Matches') 
-
-# 3. Fetch the data (This was where line 115 was failing)
-try:
-    # We use 'target_table' here because that is what we defined above
-    team_records = target_table.all() 
-    st.sidebar.success("✅ Airtable Data Loaded")
-except Exception as e:
-    st.error(f"Error fetching data: {e}")
-    st.stop()
+# Load the trained model
+with open('football_model.pkl', 'rb') as f:
+    model = pickle.load(f)
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -236,15 +235,6 @@ if st.button("Analyze All Matches"):
 
         # Display results in table format
         st.table(pd.DataFrame(results_data))
-
-        # TEMPORARY DEBUG BLOCK
-try:
-    team_records = teams_table.all()
-    st.success("Airtable Connection Successful!")
-except Exception as e:
-    st.error(f"Airtable Error: {e}")
-    # This will print the actual 401, 403, or 404 code
-    st.stop()
 
 
 # ============================================================================
