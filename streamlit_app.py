@@ -105,8 +105,8 @@ st.set_page_config(page_title="AI Football Odds Tool", layout="centered")
 st.title("⚽ AI-Powered Match Predictor")
 
 # Fetch data from Airtable
-teams_table = table.all()
-stats_records = table.all()
+teams_table = target_table.all()
+stats_records = target_table.all()
 team_names = sorted(
     [r["fields"]["Team Name"] for r in teams_table 
      if "Team Name" in r["fields"]]
