@@ -203,10 +203,9 @@ st.divider()
 st.title("🚀 Bulk Match Analyzer")
 
 raw_input = st.text_area("Paste match list here (Team names and odds):", height=200)
+import re
+
 def parse_bulk_odds(raw_text: str):
-    """
-    Uses Hugging Face Llama-3 to extract match names and odds from raw text.
-    """
     if not raw_text.strip():
         return []
 
@@ -215,15 +214,33 @@ def parse_bulk_odds(raw_text: str):
         token=st.secrets["HF_TOKEN"]
     )
     
-    prompt = f"<|system|>\nExtract matches and decimal odds into a clean list. Format: Team A vs Team B - 1.50\n<|user|>\n{raw_text}\n<|assistant|>"
+    # We tell the AI to give us a specific format we can "regex" easily
+    prompt = f"<|system|>\nExtract matches. Format exactly as: Home vs Away | Odds. One per line.\n<|user|>\n{raw_text}\n<|assistant|>"
     
     try:
         response = client.text_generation(prompt, max_new_tokens=500)
-        # For now, we return the raw string to check if it's working
-        return response 
+        
+        parsed_matches = []
+        # Logic to turn text lines into "Match Objects"
+        for line in response.strip().split('\n'):
+            if "vs" in line and "|" in line:
+                # Split "Home vs Away | 1.50"
+                teams_part, odds_part = line.split('|')
+                home, away = teams_part.split('vs')
+                
+                # We use a simple Class or Dictionary to store the data
+                class Match:
+                    def __init__(self, h, a, o):
+                        self.home_team = h.strip()
+                        self.away_team = a.strip()
+                        self.odds = o.strip()
+                
+                parsed_matches.append(Match(home, away, odds_part))
+        
+        return parsed_matches 
     except Exception as e:
         st.error(f"AI Parsing Error: {e}")
-        return "Error parsing data."
+        return []
 
 if st.button("Analyze All Matches"):
     with st.spinner("AI is organizing the data..."):
