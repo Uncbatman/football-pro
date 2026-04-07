@@ -113,35 +113,37 @@ def parse_bulk_odds(raw_text: str):
     if not raw_text.strip():
         return []
 
-    # 1. Check if token exists in secrets
-    try:
-        token = st.secrets["HF_TOKEN"]
-    except KeyError:
-        st.error("HF_TOKEN is missing from Streamlit Secrets!")
-        return []
+    token = st.secrets["HF_TOKEN"]
+    
+    # 1. NEW ROUTER URL
+    api_url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
 
-    # 2. Use a smaller, faster model to avoid timeouts
-    model_id = "meta-llama/Llama-3.2-1B-Instruct"
-    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
-    headers = {"Authorization": f"Bearer {token}"}
-
+    # 2. Use the Chat Completion format (The Router prefers this)
     payload = {
-        "inputs": f"Extract matches as 'Home vs Away | Odds'. Text: {raw_text}",
-        "parameters": {"max_new_tokens": 200, "temperature": 0.1}
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "messages": [
+            {"role": "system", "content": "Extract football matches. Format: Home vs Away | Odds"},
+            {"role": "user", "content": raw_text}
+        ],
+        "max_tokens": 500,
+        "temperature": 0.1
     }
 
     try:
         response = requests.post(api_url, headers=headers, json=payload, timeout=10)
         
-        # This will show you exactly what Hugging Face is saying (e.g., 401 for bad token)
         if response.status_code != 200:
-            st.error(f"HF Error {response.status_code}: {response.text}")
+            st.error(f"HF Router Error {response.status_code}: {response.text}")
             return []
 
         result = response.json()
-        # Handle different response formats from HF
-        ai_text = result[0].get('generated_text', '') if isinstance(result, list) else result.get('generated_text', '')
+        ai_text = result['choices'][0]['message']['content']
 
+        # ... (keep your existing parsing/regex logic here) ...
         parsed_matches = []
         for line in ai_text.strip().split('\n'):
             if " vs " in line.lower():
