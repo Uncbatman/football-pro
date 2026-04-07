@@ -1,30 +1,31 @@
 import streamlit as st
 from pyairtable import Api
 
-# 1. Pull from Secrets (Make sure these names match your Streamlit Secrets exactly!)
+# 1. Access Secrets
 try:
     AT_KEY = st.secrets["AIRTABLE_API_KEY"]
-    AT_BASE = st.secrets["AIRTABLE_BASE_ID"]
-except KeyError:
-    st.error("Secrets not found! Check your Streamlit Cloud 'Advanced Settings'.")
+    AT_BASE = st.secrets["AIRTABLE_BASE_ID"] # Must start with 'app'
+except Exception as e:
+    st.error("Missing secrets in Streamlit settings.")
     st.stop()
 
-# 2. Initialize API
 api = Api(AT_KEY)
 
-# 3. Connect to specific tables (Check your Airtable tab names!)
-# If your table is called "Teams", use 'Teams'. If it's 'Table 1', use 'Table 1'.
-teams_table_api = api.table(AT_BASE, 'Footballpro') 
+# 2. Point to the TABLE (The Tab Name)
+# Change 'Table 1' to the EXACT name of your tab in Airtable
+TABLE_NAME = 'Matches' 
+teams_table_api = api.table(AT_BASE, TABLE_NAME)
 
-# 4. Fetch the data
 try:
-    team_records = teams_table_api.all()
-    st.sidebar.success("✅ Connected to Airtable")
+    # Try a small fetch to test the handshake
+    test_fetch = teams_table_api.first()
+    st.sidebar.success(f"✅ Connected to {TABLE_NAME}")
 except Exception as e:
-    st.error(f"Airtable Connection Failed: {e}")
-    st.info("Check if your Personal Access Token has 'data.records:read' permissions.")
+    st.error(f"Handshake Failed.")
+    st.info(f"Double check that {AT_BASE} is the 'app...' ID, not the name 'Footballpro'.")
+    # This prints the raw error to your Streamlit logs
+    print(f"DEBUG: {e}") 
     st.stop()
-
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
