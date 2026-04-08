@@ -113,29 +113,37 @@ def parse_bulk_odds(raw_text: str):
 
     token = st.secrets["HF_TOKEN"]
     
-    # Use the new router endpoint instead of deprecated api-inference
-    api_url = "https://router.huggingface.co/models/meta-llama/Llama-3.2-1B-Instruct"
-    headers = {"Authorization": f"Bearer {token}"}
+    # 1. 2026 STABLE ROUTER ENDPOINT
+    # We use the 'text-generation' pipeline path
+    api_url = "https://router.huggingface.co/hf-inference/models/meta-llama/Llama-3.2-1B-Instruct/v1/chat/completions"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
 
+    # 2. PROMPT & PAYLOAD (OpenAI-compatible format)
     payload = {
-        "inputs": f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nExtract football matches. Format: Home vs Away | Odds<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{raw_text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>",
-        "parameters": {"max_new_tokens": 500, "return_full_text": False}
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "messages": [
+            {"role": "system", "content": "Extract matches from betting text. Format: Team A vs Team B | Odds. No preamble."},
+            {"role": "user", "content": raw_text}
+        ],
+        "max_tokens": 500,
+        "temperature": 0.1
     }
 
     try:
         response = requests.post(api_url, headers=headers, json=payload, timeout=15)
         
+        # This will catch and explain any remaining errors
         if response.status_code != 200:
-            st.error(f"HF Error {response.status_code}: {response.text}")
+            st.error(f"HF Router Error {response.status_code}: {response.text}")
             return []
 
         result = response.json()
-        
-        # Extract generated text from response
-        if isinstance(result, list):
-            ai_text = result[0].get('generated_text', '')
-        else:
-            ai_text = result.get('generated_text', '')
+        # The Router returns a standard chat completion object
+        ai_text = result['choices'][0]['message']['content']
 
         # Parse matches from AI response
         parsed_matches = []
