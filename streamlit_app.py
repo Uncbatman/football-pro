@@ -40,7 +40,7 @@ bankroll_manager = BankrollManager(st.session_state.bankroll_ksh)
 # ============================================================================
 
 st.set_page_config(
-    page_title="⚽ Football Betting AI",
+    page_title="⚽ Smart_scorer",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -57,7 +57,7 @@ st.markdown("""
 # HEADER
 # ============================================================================
 
-st.title("⚽ Football Betting AI")
+st.title("⚽ Smart_scorer")
 st.subheader("Smart predictions. Simple interface. Real money.")
 
 col1, col2, col3 = st.columns(3)
@@ -65,8 +65,9 @@ with col1:
     current_bankroll = st.number_input(
         "Your Money (KSh)",
         value=int(st.session_state.bankroll_ksh),
-        min_value=1000,
-        step=1000
+        min_value=100,
+        step=10,
+        key="bankroll_input"
     )
     st.session_state.bankroll_ksh = float(current_bankroll)
 
@@ -74,7 +75,8 @@ with col2:
     kelly_fraction = st.select_slider(
         "Risk Level",
         options=["🛡️ Safe (10%)", "⚖️ Balanced (25%)", "🔥 Aggressive (50%)"],
-        value="⚖️ Balanced (25%)"
+        value="⚖️ Balanced (25%)",
+        key="kelly_fraction_slider_header"
     )
     kelly_map = {"🛡️ Safe (10%)": 0.10, "⚖️ Balanced (25%)": 0.25, "🔥 Aggressive (50%)": 0.50}
     kelly_fraction = kelly_map[kelly_fraction]
@@ -83,7 +85,8 @@ with col3:
     min_ev = st.select_slider(
         "Minimum Edge",
         options=["5% Edge", "10% Edge", "15% Edge"],
-        value="5% Edge"
+        value="5% Edge",
+        key="min_ev_slider_header"
     )
     min_ev = float(min_ev.split("%")[0]) / 100
 
@@ -112,11 +115,11 @@ with tab1:
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        home_odds = st.number_input("Home Wins At", value=2.10, min_value=1.0, step=0.05)
+        home_odds = st.number_input("Home Wins At", value=2.10, min_value=1.0, step=0.05, key="home_odds")
     with col2:
-        draw_odds = st.number_input("Draw At", value=3.40, min_value=1.0, step=0.05)
+        draw_odds = st.number_input("Draw At", value=3.40, min_value=1.0, step=0.05, key="draw_odds")
     with col3:
-        away_odds = st.number_input("Away Wins At", value=3.80, min_value=1.0, step=0.05)
+        away_odds = st.number_input("Away Wins At", value=3.80, min_value=1.0, step=0.05, key="away_odds")
     
     # Analyze button
     if st.button("🔍 ANALYZE THIS MATCH", use_container_width=True, type="primary"):
@@ -307,8 +310,8 @@ st.markdown("""
 # HEADER
 # ============================================================================
 
-st.title("⚽ Football Betting AI")
-st.subheader("Smart predictions. Simple interface. Real money.")
+st.title(" score_smart")
+st.subheader("Use analytics to game smarter.")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -316,7 +319,8 @@ with col1:
         "Your Money (KSh)",
         value=int(st.session_state.bankroll_ksh),
         min_value=1000,
-        step=1000
+        step=1000,
+        key="bankroll_input_2"
     )
     st.session_state.bankroll_ksh = float(current_bankroll)
 
@@ -324,7 +328,8 @@ with col2:
     kelly_fraction = st.select_slider(
         "Risk Level",
         options=["🛡️ Safe (10%)", "⚖️ Balanced (25%)", "🔥 Aggressive (50%)"],
-        value="⚖️ Balanced (25%)"
+        value="⚖️ Balanced (25%)",
+        key="kelly_fraction_slider_2"
     )
     kelly_map = {"🛡️ Safe (10%)": 0.10, "⚖️ Balanced (25%)": 0.25, "🔥 Aggressive (50%)": 0.50}
     kelly_fraction = kelly_map[kelly_fraction]
@@ -333,7 +338,8 @@ with col3:
     min_ev = st.select_slider(
         "Minimum Edge",
         options=["5% Edge", "10% Edge", "15% Edge"],
-        value="5% Edge"
+        value="5% Edge",
+        key="min_ev_slider_2"
     )
     min_ev = float(min_ev.split("%")[0]) / 100
 
@@ -352,19 +358,7 @@ class Match:
         self.away_odds = float(away_odds) if away_odds else 3.8
 
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-
-class Match:
-    """Parse match data from bulk input."""
-    def __init__(self, home_team, away_team, home_odds=1.0, draw_odds=3.4, away_odds=3.8):
-        self.home_team = home_team.strip()
-        self.away_team = away_team.strip()
-        self.home_odds = float(home_odds) if home_odds else 1.0
-        self.draw_odds = float(draw_odds) if draw_odds else 3.4
-        self.away_odds = float(away_odds) if away_odds else 3.8
+def get_team_stats(team_name, teams_table, stats_records):
     """
     Fetches team stats from Airtable.
     
@@ -453,7 +447,7 @@ def get_mock_market_odds(home_team: str = None, away_team: str = None) -> dict:
 # STREAMLIT APP - PAGE CONFIGURATION
 # ============================================================================
 
-st.set_page_config(page_title="🏆 AI Football Value Machine", layout="wide")
+st.set_page_config(page_title="🏆 Value Machine", layout="wide")
 
 # Sidebar for configuration
 with st.sidebar:
@@ -514,7 +508,7 @@ tab1, tab2, tab3 = st.tabs(
 with tab1:
     st.title("⚽ Match Analyzer & Value Finder")
     st.write(
-        "Analyze individual matches and discover betting value using AI predictions."
+        "Analyze individual matches and discover betting value using analysis."
     )
     
     col1, col2 = st.columns(2)
@@ -837,16 +831,4 @@ with tab3:
 # ============================================================================
 
 st.divider()
-st.markdown(
-    """
-    **⚡ Active Inference Football Prediction System**
-    
-    Powered by Bayesian uncertainty modeling, Kelly Criterion risk management, and real-time value detection.
-    
-    ---
-    
-    **Disclaimer:** This tool is for informational and entertainment purposes only.
-    AI predictions are based on historical data and do not guarantee future results.
-    Betting involves risk. Please gamble responsibly. 18+
-    """
-)
+
