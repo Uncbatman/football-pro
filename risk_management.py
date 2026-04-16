@@ -69,6 +69,39 @@ class KellyCalculator:
         
         return kelly_frac
     
+    def calculate_kelly_with_keystone_buffer(
+        self,
+        decimal_odds: float,
+        probability: float,
+        keystone_missing: bool = False
+    ) -> float:
+        """
+        Calculate Kelly fraction with Keystone Variance Buffer.
+        
+        Applies a 5% entropy penalty if a key player is missing.
+        This prevents overestimation when team composition is compromised.
+        
+        Args:
+            decimal_odds: Decimal odds for the bet
+            probability: Predicted probability of winning
+            keystone_missing: Whether a key player/component is missing
+            
+        Returns:
+            Adjusted Kelly fraction
+        """
+        # Apply 5% entropy penalty if keystone is missing
+        adjusted_prob = (probability - 0.05) if keystone_missing else probability
+        adjusted_prob = max(0, min(1, adjusted_prob))  # Clamp to [0, 1]
+        
+        # Calculate Kelly with adjusted probability
+        b = decimal_odds - 1
+        p = adjusted_prob
+        q = 1 - adjusted_prob
+        
+        kelly_frac = (b * p - q) / b if b > 0 else 0
+        
+        return kelly_frac
+    
     def calculate_stake(
         self,
         bankroll: float,

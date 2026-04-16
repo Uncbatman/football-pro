@@ -1,6 +1,5 @@
 streamlit
 scikit-learn
-pyairtable
 instructor
 huggingface_hub
 supabase==2.4.0

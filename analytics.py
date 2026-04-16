@@ -199,7 +199,107 @@ class BayesianUpdater:
         return self.posterior_confidence
 
 
-class PostMortemAnalyzer:
+class ClosingLineValueCalculator:
+    """
+    Calculates Closing Line Value (CLV) to measure market alpha.
+    
+    CLV measures whether you beat the closing odds with your opening bet.
+    This is the gold standard metric for evaluating betting skill.
+    
+    CLV Formula: ((opening_odds / closing_odds) - 1) × 100
+    - CLV > 0%: You beat the closing line (market moved in your favor)
+    - CLV < 0%: You lost to the closing line (market moved against you)
+    - CLV > 2-3%: Statistically significant edge
+    """
+    
+    @staticmethod
+    def calculate_clv(opening_odds: float, closing_odds: float) -> float:
+        """
+        Calculate Closing Line Value as a percentage.
+        
+        Formula: ((opening / closing) - 1) × 100
+        
+        Args:
+            opening_odds: The odds at which you placed your bet
+            closing_odds: The final odds before the match starts
+            
+        Returns:
+            CLV as a percentage (e.g., 2.5 for +2.5% CLV)
+        """
+        if closing_odds <= 0:
+            return 0.0
+        
+        return ((opening_odds / closing_odds) - 1) * 100
+    
+    @staticmethod
+    def batch_calculate_clv(match_results: List[Dict]) -> Dict:
+        """
+        Calculate CLV statistics across multiple matches.
+        
+        Args:
+            match_results: List of dicts with 'opening_odds' and 'closing_odds'
+            
+        Returns:
+            Dict with overall CLV, per-market breakdown, and statistical summary
+        """
+        if not match_results:
+            return {
+                'total_matches': 0,
+                'average_clv': 0.0,
+                'winning_clv_matches': 0,
+                'losing_clv_matches': 0,
+                'clv_distribution': {}
+            }
+        
+        clv_values = []
+        for result in match_results:
+            clv = ClosingLineValueCalculator.calculate_clv(
+                result['opening_odds'],
+                result['closing_odds']
+            )
+            clv_values.append(clv)
+        
+        average_clv = sum(clv_values) / len(clv_values) if clv_values else 0
+        winning_clv = sum(1 for clv in clv_values if clv > 0)
+        losing_clv = sum(1 for clv in clv_values if clv <= 0)
+        
+        return {
+            'total_matches': len(clv_values),
+            'average_clv': average_clv,
+            'winning_clv_matches': winning_clv,
+            'losing_clv_matches': losing_clv,
+            'clv_values': clv_values,
+            'statistical_significance': 'YES' if average_clv > 2.5 else 'NO'
+        }
+    
+    @staticmethod
+    def evaluate_clv_edge(average_clv: float, sample_size: int) -> Dict:
+        """
+        Determine if CLV provides statistically significant edge.
+        
+        Args:
+            average_clv: Average CLV across matches
+            sample_size: Number of matches analyzed
+            
+        Returns:
+            Dict with edge assessment and confidence
+        """
+        # Rough confidence threshold: 2.5% CLV with 20+ matches is significant
+        is_significant = average_clv > 2.5 and sample_size >= 20
+        
+        return {
+            'average_clv': average_clv,
+            'sample_size': sample_size,
+            'is_significant': is_significant,
+            'recommendation': (
+                'Betting model shows edge. Continue with current approach.'
+                if is_significant
+                else 'Insufficient edge. Recalibrate model or reduce stakes.'
+            )
+        }
+
+
+
     """
     Analyzes prediction surprises to identify patterns and weaknesses.
     """

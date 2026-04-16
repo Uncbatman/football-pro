@@ -2,6 +2,348 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Import custom modules
+from prediction_engine import PredictionEngine
+from value_detection import ValueDetector
+from risk_management import KellyCalculator, BankrollManager
+from analytics import BayesianUpdater, ClosingLineValueCalculator
+
+# ============================================================================
+# CONFIGURATION & SUPABASE
+# ============================================================================
+
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+except:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
+
+# Initialize components
+try:
+    prediction_engine = PredictionEngine('football_model.pkl')
+except:
+    prediction_engine = None
+
+value_detector = ValueDetector(min_ev=0.05)
+kelly_calculator = KellyCalculator(kelly_fraction=0.25)
+bayesian_updater = BayesianUpdater(prior_confidence=0.8)
+
+# ============================================================================
+# SESSION STATE & INITIALIZATION
+# ============================================================================
+
+if 'bankroll_ksh' not in st.session_state:
+    st.session_state.bankroll_ksh = 10000.0
+
+if 'bet_history' not in st.session_state:
+    st.session_state.bet_history = []
+
+bankroll_manager = BankrollManager(st.session_state.bankroll_ksh)
+
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
+
+st.set_page_config(
+    page_title="⚽ Football-Pro: Smart Scoring",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .big-signal { font-size: 2.5rem; font-weight: bold; color: #2ecc71; }
+    .value-box { padding: 15px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 5px; }
+    .no-value-box { padding: 15px; background-color: #fff3e0; border-left: 4px solid #ff9800; border-radius: 5px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# HEADER
+# ============================================================================
+
+st.title("⚽ Football-Pro")
+st.subheader("Market Edge Detection | Smart Bankroll Management | Professional Betting")
+
+# ============================================================================
+# SIDEBAR: CONFIGURATION
+# ============================================================================
+
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    
+    current_bankroll = st.number_input(
+        "Current Bankroll (KSh)",
+        value=int(st.session_state.bankroll_ksh),
+        min_value=100,
+        step=1000,
+    )
+    st.session_state.bankroll_ksh = float(current_bankroll)
+    
+    kelly_fraction = st.slider(
+        "Kelly Fraction (%)",
+        min_value=5,
+        max_value=100,
+        value=25,
+        step=5
+    ) / 100
+    
+    min_ev = st.slider(
+        "Minimum EV Threshold (%)",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1
+    ) / 100
+    
+    st.divider()
+    st.metric("Current Bankroll", f"KSh {current_bankroll:,.0f}")
+    
+    stats = bankroll_manager.get_statistics()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Total Bets", stats['total_bets'])
+        st.metric("Win Rate", f"{stats['win_rate']:.1f}%")
+    with col2:
+        st.metric("ROI", f"{stats['roi']:.1f}%")
+        st.metric("Profit", f"KSh {stats['profit']:,.0f}")
+
+# ============================================================================
+# MAIN INTERFACE: THE BIG SIGNAL
+# ============================================================================
+
+st.markdown("---")
+
+tab1, tab2, tab3 = st.tabs(["🎯 Big Signal", "📊 Bulk Analyzer", "📈 Analytics"])
+
+# ============================================================================
+# TAB 1: THE BIG SIGNAL - VALUE DETECTION
+# ============================================================================
+
+with tab1:
+    st.markdown("""
+    ## Market Edge (EV) Detection
+    
+    **The Big Signal** is our single most important metric: **Expected Value (EV)**.
+    
+    When EV > 0%, you have a mathematical edge against the market.
+    """)
+    
+    st.divider()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        home_team = st.text_input("Home Team", placeholder="e.g., Manchester United")
+    with col2:
+        away_team = st.text_input("Away Team", placeholder="e.g., Liverpool")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        home_odds = st.number_input("Home Win Odds", value=2.10, min_value=1.01, step=0.05, key="h_odds")
+    with col2:
+        draw_odds = st.number_input("Draw Odds", value=3.40, min_value=1.01, step=0.05, key="d_odds")
+    with col3:
+        away_odds = st.number_input("Away Win Odds", value=3.80, min_value=1.01, step=0.05, key="a_odds")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        home_prob = st.slider("Home Win Probability (%)", 0, 100, 45, key="h_prob") / 100
+    with col2:
+        draw_prob = st.slider("Draw Probability (%)", 0, 100, 25, key="d_prob") / 100
+    with col3:
+        away_prob = st.slider("Away Win Probability (%)", 0, 100, 30, key="a_prob") / 100
+    
+    # Normalize probabilities to sum to 1
+    total_prob = home_prob + draw_prob + away_prob
+    if total_prob > 0:
+        home_prob /= total_prob
+        draw_prob /= total_prob
+        away_prob /= total_prob
+    
+    if st.button("🔍 ANALYZE", use_container_width=True, type="primary"):
+        st.divider()
+        
+        # Calculate EVs
+        ev_home = value_detector.calculate_ev(home_odds, home_prob)
+        ev_draw = value_detector.calculate_ev(draw_odds, draw_prob)
+        ev_away = value_detector.calculate_ev(away_odds, away_prob)
+        
+        # Determine best opportunity
+        opportunities = [
+            {"outcome": f"{home_team} Win", "odds": home_odds, "prob": home_prob, "ev": ev_home},
+            {"outcome": "Draw", "odds": draw_odds, "prob": draw_prob, "ev": ev_draw},
+            {"outcome": f"{away_team} Win", "odds": away_odds, "prob": away_prob, "ev": ev_away},
+        ]
+        
+        best_opp = max(opportunities, key=lambda x: x['ev'])
+        
+        # Display The Big Signal
+        st.markdown(f"""
+        <div style='text-align: center; padding: 30px; background-color: #1e1e1e; border-radius: 10px; margin: 20px 0;'>
+            <div style='font-size: 1.2rem; color: #aaa; margin-bottom: 10px;'>MARKET EDGE (EV)</div>
+            <div class='big-signal'>{best_opp['ev']*100:+.1f}%</div>
+            <div style='font-size: 1.1rem; color: #4caf50; margin-top: 10px;'>{best_opp['outcome']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Value Assessment
+        if best_opp['ev'] > min_ev:
+            st.markdown(f"""
+            <div class='value-box'>
+            <h3>✅ VALUE DETECTED</h3>
+            <p><strong>{best_opp['outcome']}</strong> at {best_opp['odds']:.2f} offers <strong>{best_opp['ev']*100:+.1f}% edge</strong></p>
+            <p>Our Model: {best_opp['prob']*100:.0f}% | Market: {1/best_opp['odds']*100:.0f}%</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Kelly Stake Recommendation
+            stake = kelly_calculator.calculate_stake(
+                st.session_state.bankroll_ksh,
+                best_opp['odds'],
+                best_opp['prob']
+            )
+            kelly_frac = kelly_calculator.calculate_kelly_fraction(best_opp['odds'], best_opp['prob'])
+            
+            st.markdown(f"""
+            <div style='padding: 15px; background-color: #f0f2f6; border-radius: 5px; margin-top: 15px;'>
+            <h4>🎲 Recommended Stake</h4>
+            <p><strong>KSh {stake:,.0f}</strong> ({kelly_frac*100:.1f}% of bankroll with {kelly_fraction*100:.0f}% Kelly)</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Place Bet", use_container_width=True):
+                    st.session_state.bet_history.append({
+                        'match': f"{home_team} vs {away_team}",
+                        'outcome': best_opp['outcome'],
+                        'odds': best_opp['odds'],
+                        'stake': stake,
+                        'ev': best_opp['ev'],
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    st.success(f"✅ Bet placed for KSh {stake:,.0f}")
+                    st.balloons()
+            
+            with col2:
+                if st.button("📊 View All Opportunities", use_container_width=True):
+                    st.write("All Opportunities:")
+                    for opp in sorted(opportunities, key=lambda x: x['ev'], reverse=True):
+                        st.write(f"- **{opp['outcome']}**: {opp['ev']*100:+.1f}% EV")
+        
+        else:
+            st.markdown(f"""
+            <div class='no-value-box'>
+            <h3>❌ NO VALUE DETECTED</h3>
+            <p>Best opportunity ({best_opp['outcome']}) has <strong>{best_opp['ev']*100:+.1f}% EV</strong></p>
+            <p><strong>Recommendation:</strong> No trades recommended. Wait for better odds.</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+# ============================================================================
+# TAB 2: BULK ANALYZER
+# ============================================================================
+
+with tab2:
+    st.subheader("Bulk Match Analysis")
+    st.write("Analyze multiple matches at once")
+    
+    bulk_input = st.text_area(
+        "Enter matches (one per line): Team A vs Team B | Odds1 Odds2 Odds3 | Prob1% Prob2% Prob3%",
+        placeholder="Man United vs Liverpool | 2.10 3.40 3.80 | 45 25 30",
+        height=150
+    )
+    
+    if st.button("Analyze All"):
+        if bulk_input.strip():
+            results = []
+            for line in bulk_input.strip().split('\n'):
+                if not line.strip():
+                    continue
+                try:
+                    parts = line.split('|')
+                    if len(parts) >= 2:
+                        teams = parts[0].strip().split('vs')
+                        odds = list(map(float, parts[1].strip().split()))
+                        probs = [p/100 for p in map(float, parts[2].strip().split())] if len(parts) > 2 else [0.45, 0.25, 0.30]
+                        
+                        # Normalize
+                        total = sum(probs)
+                        probs = [p/total for p in probs]
+                        
+                        ev1 = (odds[0] * probs[0]) - 1
+                        ev2 = (odds[1] * probs[1]) - 1 if len(odds) > 1 else 0
+                        ev3 = (odds[2] * probs[2]) - 1 if len(odds) > 2 else 0
+                        
+                        best_ev = max(ev1, ev2, ev3)
+                        results.append({
+                            'Match': line.split('|')[0].strip(),
+                            'Best EV': f"{best_ev*100:+.1f}%",
+                            'Value': "✅ YES" if best_ev > min_ev else "❌ NO"
+                        })
+                except:
+                    pass
+            
+            if results:
+                df = pd.DataFrame(results)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.error("Could not parse input. Check format.")
+
+# ============================================================================
+# TAB 3: ANALYTICS DASHBOARD
+# ============================================================================
+
+with tab3:
+    st.subheader("Analytics & Performance")
+    
+    if st.session_state.bet_history:
+        bet_df = pd.DataFrame(st.session_state.bet_history)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Bets", len(bet_df))
+        with col2:
+            st.metric("Total Staked", f"KSh {bet_df['stake'].sum():,.0f}")
+        with col3:
+            avg_ev = bet_df['ev'].mean()
+            st.metric("Avg EV", f"{avg_ev*100:+.1f}%")
+        with col4:
+            st.metric("Model Confidence", f"{bayesian_updater.get_confidence()*100:.0f}%")
+        
+        st.divider()
+        st.subheader("Bet History")
+        st.dataframe(
+            bet_df[['match', 'outcome', 'odds', 'stake', 'ev']],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        if st.button("🗑️ Clear History"):
+            st.session_state.bet_history = []
+            st.rerun()
+    else:
+        st.info("📊 No betting history yet. Start analyzing matches to see analytics.")
+
+st.markdown("---")
+st.caption("⚠️ Disclaimer: Betting involves risk. Only bet money you can afford to lose. Football-Pro provides analytical tools, not financial advice.")
+import streamlit as st
+import pandas as pd
+from supabase import create_client
+from datetime import datetime
 
 # Import custom modules
 from prediction_engine import PredictionEngine

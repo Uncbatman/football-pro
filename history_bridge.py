@@ -1,37 +1,78 @@
 import os
 import requests
-from supabase import create_client
+import time
+from supabase import create_client, Client
 from dotenv import load_dotenv
 
+# Load credentials from .env
 load_dotenv()
-supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_DATA_API_KEY")
 
-def sync_history():
-    # 1. Fetch Mapping
-    teams = supabase.table('teams').select("id, team_name").execute().data
-    name_to_id = {t['team_name'].lower(): t['id'] for t in teams}
+# Initialize Bridge
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # 2. API Fetch (Finished Matches)
+def sync_historical_data():
+    print("--- 🌉 Opening the Data Bridge ---")
+    
+    # 1. Fetch our Teams 'Dictionary' from Supabase
+    teams_res = supabase.table('teams').select("id, team_name").execute()
+    name_to_id = {t['team_name'].lower(): t['id'] for t in teams_res.data}
+    
+    # 2. Fetch Finished Matches from Football-Data.org
     url = "https://api.football-data.org/v4/competitions/PL/matches?status=FINISHED"
-    headers = {'X-Auth-Token': os.getenv("FOOTBALL_DATA_API_KEY")}
-    matches = requests.get(url, headers=headers).json().get('matches', [])
+    headers = {'X-Auth-Token': FOOTBALL_API_KEY}
+    
+    try:
+        response = requests.get(url, headers=headers).json()
+        matches = response.get('matches', [])
+    except Exception as e:
+        print(f"❌ API Connection Failed: {e}")
+        return
 
-    for m in matches:
-        h_id = name_to_id.get(m['homeTeam']['name'].lower())
-        a_id = name_to_id.get(m['awayTeam']['name'].lower())
+    # 3. Process and Insert
+    new_records = 0
+    for m in matches[-50:]: # Sync the most recent 50 matches
+        home_name = m['homeTeam']['name']
+        away_name = m['awayTeam']['name']
         
-        if h_id and a_id:
-            # Note: Fetch closing odds from your live_predictions table or external source
-            # For this bridge, we insert the core result
+        home_id = name_to_id.get(home_name.lower())
+        away_id = name_to_id.get(away_name.lower())
+        
+        if home_id and away_id:
+            # Extract match data
+            raw_date = m['utcDate'].split('T')[0]
+            h_score = m['score']['fullTime']['home']
+            a_score = m['score']['fullTime']['away']
+            
+            # Determine result: 'H' (home win), 'A' (away win), 'D' (draw)
+            if h_score > a_score:
+                winner_letter = 'H'
+            elif a_score > h_score:
+                winner_letter = 'A'
+            else:
+                winner_letter = 'D'
+            
             payload = {
-                "match_date": m['utcDate'].split('T')[0],
-                "home_team_id": h_id,
-                "away_team_id": a_id,
-                "home_goals": m['score']['fullTime']['home'],
-                "away_goals": m['score']['fullTime']['away'],
-                "result": m['score']['winner'][0] if m['score']['winner'] else 'D'
+                "match_date": raw_date,
+                "home_team_id": home_id,
+                "away_team_id": away_id,
+                "home_goals": h_score,
+                "away_goals": a_score,
+                "result": winner_letter
             }
-            supabase.table('historical_stats').upsert(payload, on_conflict='match_date, home_team_id').execute()
+            
+            # Upsert prevents duplicates if you run this script twice
+            try:
+                supabase.table('historical_stats').upsert(
+                    payload, on_conflict='match_date, home_team_id'
+                ).execute()
+                new_records += 1
+            except Exception as e:
+                print(f"⚠️ Skip {home_name} vs {away_name}: {e}")
+
+    print(f"--- ✅ Sync Complete: {new_records} matches stored in Supabase ---")
 
 if __name__ == "__main__":
-    sync_history()
+    sync_historical_data()
