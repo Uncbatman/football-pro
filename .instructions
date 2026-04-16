@@ -1,0 +1,265 @@
+# Football-Pro Agent Instructions
+
+## Core Philosophy
+
+**Simplicity First.** Ask for logical changes. Fix obvious issues silently. Code analysis beats complexity.
+
+---
+
+## What to Fix Silently (No Need to Ask)
+
+1. **Syntax/Import Errors**: Missing imports, typos, unused imports, malformed code
+2. **Type Hint Issues**: Add/fix type hints, import missing types
+3. **Simple Bugs**: Off-by-one errors, obvious logic mistakes
+4. **Style Compliance**: Enforce docstring formatting, consistent naming
+
+These fixes are safe—they don't change behavior, just fix what's broken.
+
+---
+
+## What to Ask About (Ask First)
+
+1. **Logical Changes**: Modifying algorithm behavior, changing formula inputs, altering prediction logic
+2. **Refactoring**: Extracting functions, reorganizing modules, changing class structure
+3. **API Changes**: Modifying function signatures that other code depends on
+4. **Configuration Changes**: Moving hardcoded values, changing thresholds
+
+Always explain:
+
+- What's the problem?
+- Why does this change help?
+- What are the trade-offs?
+
+---
+
+## Debugging (Debug Without Asking)
+
+1. Add logging to trace execution
+2. Isolate the failing component
+3. Reproduce systematically
+4. Once fixed, suggest simplifications
+5. Clean up debug logging
+
+Example: "I found the issue—here's the root cause and the minimal fix." Then ask if they want to apply it or see alternatives.
+
+---
+
+## Graceful Fallback & Safeguards
+
+### Core Modules (prediction_engine.py, value_detection.py, etc.)
+
+- Always raise meaningful exceptions with context
+- Use try-except for external data/files
+- Log errors before raising
+- Example:
+  ```python
+  try:
+      with open(self.model_path, 'rb') as f:
+          self.model = pickle.load(f)
+  except FileNotFoundError:
+      logger.error(f"Model not found: {self.model_path}")
+      raise ValueError("Model initialization failed") from e
+  ```
+
+### Streamlit UI (streamlit_app.py)
+
+- Never let exceptions crash the app—use try-except at top level
+- Provide fallback values or defaults
+- Show user-friendly error messages with `st.error()`
+- Log the actual error, but display helpful guidance
+- Example:
+  ```python
+  try:
+      team_stats = get_team_stats(team_name, teams_table, stats_records)
+  except Exception as e:
+      logger.error(f"Failed to fetch stats: {e}")
+      st.warning("Team data unavailable. Using league averages.")
+      team_stats = (1.35, 1.35)  # LEAGUE_AVG_SCORED, LEAGUE_AVG_CONCEDED
+  ```
+
+---
+
+## UI vs. Core Modules: What's Different?
+
+### Core Modules (Computation-Focused)
+
+- **Purpose**: Pure logic for prediction, value detection, risk management
+- **Examples**: `prediction_engine.py`, `value_detection.py`, `risk_management.py`, `analytics.py`
+- **Testing**: Unit tests with fixtures; mock external dependencies
+- **Refactoring**: Safe to reorganize—trace all imports and update them
+- **Error Handling**: Raise exceptions; let caller decide what to do
+- **Dependencies**: No Streamlit, no session state, no user input handling
+- **Philosophy**: Fail loudly; be correct above all else
+
+### Streamlit UI (Orchestration-Focused)
+
+- **Purpose**: Orchestrate core modules, handle user input, manage state
+- **Examples**: `streamlit_app.py`
+- **Testing**: Harder to test; requires mocking Streamlit and Supabase
+- **Refactoring**: Changes affect user experience; ask first
+- **Error Handling**: Graceful degradation; show friendly messages
+- **Dependencies**: Streamlit, Supabase API, session state, user widgets
+- **Philosophy**: Fail gracefully; guide the user back on track
+
+**Key Difference:**
+
+- **Core**: "If input is invalid, raise an error—the caller must handle it"
+- **UI**: "If data is missing, use defaults and inform the user"
+
+---
+
+## Code Analysis Guidelines
+
+### Architecture Understanding
+
+- Football-pro uses **class-based design** (PredictionEngine, ValueDetector, KellyCalculator, etc.)
+- Each module has **single responsibility**—don't blur those lines
+- Keep **mathematical logic transparent**: document formulas as comments
+- Use **configuration over hardcoding**: leverage `st.secrets` and module constants
+- **Core logic is imported by the UI**, not the other way around
+
+### When Analyzing Code
+
+1. **Check type hints first**—they tell the story
+2. **Read docstrings**—especially for financial formulas
+3. **Trace the data flow**: input → prediction → output → UI display
+4. **Check coupling**: Are core modules dependent on Streamlit? (They shouldn't be)
+5. **Look for missing safeguards**: What happens when external APIs fail?
+
+---
+
+## Optimization Principles
+
+1. **Measure before optimizing**: Is this actually slow? Get profile data.
+2. **Fix algorithmic issues, not micro-optimizations**: Big-O matters more than 10% speedups.
+3. **Preserve readability**: A slightly slower clear function beats a clever obscure one.
+4. **Test the changes**: Verify optimization didn't break behavior.
+5. **Profile the UI separately**: Streamlit rendering can be bottleneck—consider caching with `@st.cache_data`.
+
+---
+
+## Testing Advice
+
+### Core Modules (High Priority)
+
+- Each class should have unit tests
+- Test with fixtures for reproducible data
+- Mock external dependencies (file I/O, Supabase, HuggingFace)
+- Example: Test `predict_match()` with known inputs/outputs
+- Coverage goal: 80%+
+- Example test structure:
+  ```python
+  def test_prediction_engine_generates_valid_probabilities():
+      engine = PredictionEngine(model_path='test_model.pkl')
+      probs = engine.predict_match(home_avg_goals=1.5, away_avg_conceded=1.2)
+      assert sum(probs.values()) == pytest.approx(1.0, abs=0.01)
+      assert all(0 <= p <= 1 for p in probs.values())
+  ```
+
+### Streamlit App (Medium Priority)
+
+- Harder to test due to session state; use `pytest` with Streamlit's testing helpers
+- Mock Supabase API calls
+- Test key workflows (single match, bulk analyzer)
+- Focus on error handling, not UI rendering
+- Example: Verify graceful fallback when team data is missing
+
+### Data Pipeline (Lower Priority if stable)
+
+- `parser.py`, `current.py`, `history.py`: Test data parsing with sample files
+- Ensure bad input doesn't crash
+
+### If Writing New Tests
+
+- Use `pytest` (existing pattern)
+- Name tests as `test_<module>_<function>.py`
+- Place in the same directory as tests
+- Run: `pytest -v`
+
+---
+
+## Code Style Compliance
+
+### All Files
+
+- Use **type hints** on function signatures: `def predict_match(home_goals: float, away_conceded: float) -> Dict[str, float]:`
+- Write **docstrings** for all public functions (especially math-heavy ones)
+- Keep **functions focused**: <25 lines ideal, <50 max
+- Use **constants for magic numbers**: `MIN_EV_THRESHOLD = 0.05` not hardcoded `0.05`
+- Follow **Python logging**: `logging.basicConfig()` at module level
+
+### Core Modules Specifically
+
+- No Streamlit imports
+- Raise exceptions for invalid states
+- Clear input/output contracts in docstrings
+
+### Streamlit App Specifically
+
+- Use `st.session_state` for stateful data
+- Use `st.secrets` for API keys (never hardcode)
+- Use `@st.cache_data` for expensive operations
+- Use `st.error()`, `st.warning()`, `st.success()` for user feedback
+- Organize code in sections with comments: `# ====== SECTION NAME ====`
+
+---
+
+## When to Suggest Refactoring
+
+- **Duplication**: Same logic in 2+ places → extract to shared function (ask first)
+- **Dead code**: Unused imports, unused functions → remove silently
+- **Tight coupling**: Module A hardcodes values from Module B → add parameters (ask first)
+- **Missing safeguards**: External API call without try-except → add error handling (ask first)
+- **Type hints**: Missing across a function → add them silently
+- **Docstrings**: Missing for public functions → add them silently
+
+---
+
+## Red Flags (Question These)
+
+- Don't add "just in case" code (test if it's needed)
+- Don't optimize prematurely (profile first)
+- Don't refactor without understanding why
+- Don't mix concerns (e.g., prediction logic in the UI file)
+- Don't hardcode thresholds (use constants or configuration)
+- Don't let errors silently fail (always log or raise)
+
+---
+
+## Example Interaction Patterns
+
+### Pattern 1: Silent Fix (Syntax/Import)
+
+**You see:** Missing import `from typing import Dict`  
+**Action:** Fix silently, don't ask  
+**Output:** "(Fixed missing import)"
+
+### Pattern 2: Debug Without Asking
+
+**You see:** Function returns wrong value  
+**Action:** Add logging, trace execution, identify root cause, fix it  
+**Output:** "I found the bug—[explanation]—here's the minimal fix. Should I apply it?"
+
+### Pattern 3: Ask for Logical Changes
+
+**You see:** Request to change Kelly fraction from 0.25 to 0.15  
+**Action:** Ask first  
+**Output:** "This changes risk exposure from 25% Kelly to 15% Kelly. That's safer but less aggressive. Want to apply this?"
+
+### Pattern 4: Graceful Degradation in UI
+
+**You see:** Supabase API fails  
+**Action:** Catch exception, log it, use fallback values, show message to user  
+**Output:** UI shows "Data unavailable—using defaults" instead of crashing
+
+---
+
+## Summary Checklist
+
+- [ ] Apply to **all Python files**
+- [ ] **Ask first**: Logical changes, refactors, API changes, configuration
+- [ ] **Fix silently**: Syntax, imports, typos, type hints, docstrings, dead code
+- [ ] **Debug without asking**: Add logging, find root cause, suggest fix
+- [ ] **Safeguards**: Core modules raise exceptions; UI falls back gracefully
+- [ ] **Testing advice**: Prioritize core modules, mock external deps, 80%+ coverage
+- [ ] **UI is different**: Orchestration-focused, graceful failures, session state management

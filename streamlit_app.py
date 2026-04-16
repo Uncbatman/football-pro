@@ -1,46 +1,341 @@
 import streamlit as st
 import pandas as pd
-import re
-import requests
-from pyairtable import Api
+from supabase import create_client
+from datetime import datetime
 
 # Import custom modules
 from prediction_engine import PredictionEngine
 from value_detection import ValueDetector
 from risk_management import KellyCalculator, BankrollManager
-from analytics import BayesianUpdater, PostMortemAnalyzer, BrierScoreCalculator
+from analytics import BayesianUpdater
 
 # ============================================================================
-# CONFIGURATION & SECRETS
+# CONFIGURATION & SUPABASE
 # ============================================================================
 
-AT_KEY = st.secrets["AIRTABLE_API_KEY"]
-AT_BASE = st.secrets["AIRTABLE_BASE_ID"]
-HF_TOKEN = st.secrets["HF_TOKEN"]
-
-# Initialize Airtable
-api = Api(AT_KEY)
-target_table = api.table(AT_BASE, 'Matches')
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Initialize components
 prediction_engine = PredictionEngine('football_model.pkl')
 value_detector = ValueDetector(min_ev=0.05)
 kelly_calculator = KellyCalculator(kelly_fraction=0.25)
 bayesian_updater = BayesianUpdater(prior_confidence=0.8)
-postmortem_analyzer = PostMortemAnalyzer()
 
 # ============================================================================
 # SESSION STATE & INITIALIZATION
 # ============================================================================
 
-if 'bankroll' not in st.session_state:
-    st.session_state.bankroll = 1000.0
+if 'bankroll_ksh' not in st.session_state:
+    st.session_state.bankroll_ksh = 10000.0  # 10,000 KSh default
 
 if 'bet_history' not in st.session_state:
     st.session_state.bet_history = []
 
-# Initialize bankroll manager
-bankroll_manager = BankrollManager(st.session_state.bankroll)
+bankroll_manager = BankrollManager(st.session_state.bankroll_ksh)
+
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
+
+st.set_page_config(
+    page_title="⚽ Football Betting AI",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+st.markdown("""
+<style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .big-number { font-size: 2.5rem; font-weight: bold; color: #2ecc71; }
+    .success-box { padding: 15px; background-color: #d4edda; border-radius: 5px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# HEADER
+# ============================================================================
+
+st.title("⚽ Football Betting AI")
+st.subheader("Smart predictions. Simple interface. Real money.")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    current_bankroll = st.number_input(
+        "Your Money (KSh)",
+        value=int(st.session_state.bankroll_ksh),
+        min_value=1000,
+        step=1000
+    )
+    st.session_state.bankroll_ksh = float(current_bankroll)
+
+with col2:
+    kelly_fraction = st.select_slider(
+        "Risk Level",
+        options=["🛡️ Safe (10%)", "⚖️ Balanced (25%)", "🔥 Aggressive (50%)"],
+        value="⚖️ Balanced (25%)"
+    )
+    kelly_map = {"🛡️ Safe (10%)": 0.10, "⚖️ Balanced (25%)": 0.25, "🔥 Aggressive (50%)": 0.50}
+    kelly_fraction = kelly_map[kelly_fraction]
+
+with col3:
+    min_ev = st.select_slider(
+        "Minimum Edge",
+        options=["5% Edge", "10% Edge", "15% Edge"],
+        value="5% Edge"
+    )
+    min_ev = float(min_ev.split("%")[0]) / 100
+
+# ============================================================================
+# MAIN TABS
+# ============================================================================
+
+tab1, tab2 = st.tabs(["📊 Analyze Match", "📈 My Bets"])
+
+# ============================================================================
+# TAB 1: SIMPLE MATCH ANALYZER
+# ============================================================================
+
+with tab1:
+    st.markdown("---")
+    st.subheader("Step 1: Pick Teams")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        home_team = st.text_input("Home Team (e.g., Manchester United)", placeholder="Type team name")
+    with col2:
+        away_team = st.text_input("Away Team (e.g., Liverpool)", placeholder="Type team name")
+    
+    st.markdown("---")
+    st.subheader("Step 2: Enter Odds")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        home_odds = st.number_input("Home Wins At", value=2.10, min_value=1.0, step=0.05)
+    with col2:
+        draw_odds = st.number_input("Draw At", value=3.40, min_value=1.0, step=0.05)
+    with col3:
+        away_odds = st.number_input("Away Wins At", value=3.80, min_value=1.0, step=0.05)
+    
+    # Analyze button
+    if st.button("🔍 ANALYZE THIS MATCH", use_container_width=True, type="primary"):
+        if not home_team or not away_team:
+            st.error("⚠️ Please enter both team names")
+        else:
+            with st.spinner("Analyzing..."):
+                # Get predictions from model
+                try:
+                    predictions = prediction_engine.predict_match(1.5, 1.2)  # Using default stats
+                    
+                    # Create simple display
+                    st.markdown("---")
+                    st.subheader(f"📊 {home_team.title()} vs {away_team.title()}")
+                    
+                    # Prediction results
+                    pred_col1, pred_col2, pred_col3 = st.columns(3)
+                    
+                    with pred_col1:
+                        st.markdown(f"""
+                        <div style='text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 10px;'>
+                            <div style='font-size: 2rem; font-weight: bold; color: #2c3e50;'>{predictions['home_win']*100:.0f}%</div>
+                            <div style='font-size: 1rem; color: #7f8c8d;'>{home_team.title()} Wins</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with pred_col2:
+                        st.markdown(f"""
+                        <div style='text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 10px;'>
+                            <div style='font-size: 2rem; font-weight: bold; color: #2c3e50;'>{predictions['draw']*100:.0f}%</div>
+                            <div style='font-size: 1rem; color: #7f8c8d;'>Draw</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with pred_col3:
+                        st.markdown(f"""
+                        <div style='text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 10px;'>
+                            <div style='font-size: 2rem; font-weight: bold; color: #2c3e50;'>{predictions['away_win']*100:.0f}%</div>
+                            <div style='font-size: 1rem; color: #7f8c8d;'>{away_team.title()} Wins</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # VALUE DETECTION
+                    st.markdown("---")
+                    st.subheader("💰 Is This a Good Bet?")
+                    
+                    # Check each outcome for value
+                    outcomes = [
+                        {"name": f"{home_team.title()} Wins", "odds": home_odds, "prob": predictions['home_win']},
+                        {"name": "Draw", "odds": draw_odds, "prob": predictions['draw']},
+                        {"name": f"{away_team.title()} Wins", "odds": away_odds, "prob": predictions['away_win']},
+                    ]
+                    
+                    value_bets = []
+                    for outcome in outcomes:
+                        ev = (outcome['odds'] * outcome['prob']) - 1
+                        if ev > min_ev:
+                            value_bets.append(outcome)
+                            
+                            # Show this is a good bet
+                            st.success(f"""
+                            ✅ **{outcome['name']}** - GOOD VALUE!
+                            - Odds: {outcome['odds']:.2f}
+                            - Our prediction: {outcome['prob']*100:.0f}%
+                            - Edge: +{ev*100:.0f}%
+                            """)
+                    
+                    if not value_bets:
+                        st.info("❌ No good value bets found. Bookmakers have priced this fairly.")
+                    
+                    # KELLY STAKES
+                    st.markdown("---")
+                    st.subheader("🎲 How Much Should You Bet?")
+                    
+                    for bet in value_bets:
+                        kelly_calc = KellyCalculator(kelly_fraction=kelly_fraction)
+                        stake = kelly_calc.calculate_kelly_fraction(bet['odds'], bet['prob'])
+                        stake_amount = stake * st.session_state.bankroll_ksh
+                        
+                        if stake_amount > 0:
+                            st.markdown(f"""
+                            <div style='padding: 15px; background-color: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 5px;'>
+                                <div style='font-size: 1.3rem; font-weight: bold;'>💵 Bet <span style='color: #2ecc71;'>KSh {stake_amount:,.0f}</span> on {bet['name']}</div>
+                                <div style='font-size: 0.9rem; color: #555; margin-top: 8px;'>
+                                    This is {stake*100:.1f}% of your bankroll - Safe betting strategy
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Quick bet placement
+                            if st.button(f"✅ Place Bet: KSh {stake_amount:,.0f} on {bet['name']}", key=f"bet_{bet['name']}"):
+                                st.session_state.bet_history.append({
+                                    'match': f"{home_team} vs {away_team}",
+                                    'bet': bet['name'],
+                                    'odds': bet['odds'],
+                                    'stake': stake_amount,
+                                    'probability': bet['prob']
+                                })
+                                st.success(f"✅ Bet placed! Good luck!")
+                                st.balloons()
+                
+                except Exception as e:
+                    st.error(f"⚠️ Error analyzing match: {str(e)}")
+
+# ============================================================================
+# TAB 2: BET HISTORY
+# ============================================================================
+
+with tab2:
+    st.subheader("📋 Your Bets")
+    
+    if st.session_state.bet_history:
+        bet_df = pd.DataFrame(st.session_state.bet_history)
+        
+        st.dataframe(
+            bet_df[['match', 'bet', 'stake', 'odds', 'probability']],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        total_staked = bet_df['stake'].sum()
+        st.metric("Total Staked", f"KSh {total_staked:,.0f}")
+        
+        if st.button("🗑️ Clear History"):
+            st.session_state.bet_history = []
+            st.rerun()
+    else:
+        st.info("No bets yet. Analyze a match to get started!")
+
+st.markdown("---")
+st.caption("⚠️ Disclaimer: Betting involves risk. Only bet money you can afford to lose.")
+import streamlit as st
+import pandas as pd
+from supabase import create_client
+from datetime import datetime
+
+# Import custom modules
+from prediction_engine import PredictionEngine
+from value_detection import ValueDetector
+from risk_management import KellyCalculator, BankrollManager
+from analytics import BayesianUpdater
+
+# ============================================================================
+# CONFIGURATION & SUPABASE
+# ============================================================================
+
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Initialize components
+prediction_engine = PredictionEngine('football_model.pkl')
+value_detector = ValueDetector(min_ev=0.05)
+kelly_calculator = KellyCalculator(kelly_fraction=0.25)
+bayesian_updater = BayesianUpdater(prior_confidence=0.8)
+
+# ============================================================================
+# SESSION STATE & INITIALIZATION
+# ============================================================================
+
+if 'bankroll_ksh' not in st.session_state:
+    st.session_state.bankroll_ksh = 10000.0  # 10,000 KSh default
+
+if 'bet_history' not in st.session_state:
+    st.session_state.bet_history = []
+
+bankroll_manager = BankrollManager(st.session_state.bankroll_ksh)
+
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
+
+st.set_page_config(
+    page_title="⚽ Football Betting AI",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+st.markdown("""
+<style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .big-number { font-size: 2.5rem; font-weight: bold; color: #2ecc71; }
+    .success-box { padding: 15px; background-color: #d4edda; border-radius: 5px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# HEADER
+# ============================================================================
+
+st.title("⚽ Football Betting AI")
+st.subheader("Smart predictions. Simple interface. Real money.")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    current_bankroll = st.number_input(
+        "Your Money (KSh)",
+        value=int(st.session_state.bankroll_ksh),
+        min_value=1000,
+        step=1000
+    )
+    st.session_state.bankroll_ksh = float(current_bankroll)
+
+with col2:
+    kelly_fraction = st.select_slider(
+        "Risk Level",
+        options=["🛡️ Safe (10%)", "⚖️ Balanced (25%)", "🔥 Aggressive (50%)"],
+        value="⚖️ Balanced (25%)"
+    )
+    kelly_map = {"🛡️ Safe (10%)": 0.10, "⚖️ Balanced (25%)": 0.25, "🔥 Aggressive (50%)": 0.50}
+    kelly_fraction = kelly_map[kelly_fraction]
+
+with col3:
+    min_ev = st.select_slider(
+        "Minimum Edge",
+        options=["5% Edge", "10% Edge", "15% Edge"],
+        value="5% Edge"
+    )
+    min_ev = float(min_ev.split("%")[0]) / 100
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -57,7 +352,19 @@ class Match:
         self.away_odds = float(away_odds) if away_odds else 3.8
 
 
-def get_team_stats(team_name, teams_table, stats_records):
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+
+class Match:
+    """Parse match data from bulk input."""
+    def __init__(self, home_team, away_team, home_odds=1.0, draw_odds=3.4, away_odds=3.8):
+        self.home_team = home_team.strip()
+        self.away_team = away_team.strip()
+        self.home_odds = float(home_odds) if home_odds else 1.0
+        self.draw_odds = float(draw_odds) if draw_odds else 3.4
+        self.away_odds = float(away_odds) if away_odds else 3.8
     """
     Fetches team stats from Airtable.
     

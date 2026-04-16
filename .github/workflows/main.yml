@@ -1,0 +1,25 @@
+name: Football-Pro-Automation
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Sync history every Monday
+    - cron: '0 */6 * * *' # Scan market every 6 hours
+  workflow_dispatch:
+
+jobs:
+  run-tasks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Python Setup
+        uses: actions/setup-python@v4
+        with: {python-version: '3.9'}
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Sync and Scan
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+        run: |
+          python history_bridge.py
+          python live_bridge.py
