@@ -6,7 +6,15 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+import streamlit as st
 
+# INITIALIZATION BLOCK
+# This ensures 'bankroll' exists the moment the app starts
+if 'bankroll' not in st.session_state:
+    st.session_state.bankroll = 1000.0  # Set your starting default here
+
+if 'min_edge' not in st.session_state:
+    st.session_state.min_edge = 5.0
 # ============================================================================
 # PAGE CONFIG (Jobsian Minimalism)
 # ============================================================================
