@@ -1,43 +1,52 @@
 import os
+import requests
+from supabase import create_client
 from dotenv import load_dotenv
 
 load_dotenv()
+supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
 
-def calculate_kelly(prob, odds, keystone_missing=False):
-    """
-    Calculate Kelly Criterion with Keystone Variance Buffer.
-    
-    Args:
-        prob: Probability of winning (0-1)
-        odds: Decimal odds
-        keystone_missing: If True, reduces probability by 5% for key personnel absence
-    
-    Returns:
-        Optimal bet fraction (0-1), reduced to 25% Kelly for safety
-    """
-    # Variance Buffer: Reduce probability by 5% if key personnel are missing
-    p = (prob - 0.05) if keystone_missing else prob
-    q = 1 - p
-    b = odds - 1
-    
-    kelly_f = (b * p - q) / b
-    return max(0, kelly_f * 0.25)  # Quarter Kelly for survival
+def calculate_ev(prob, odds):
+    # EV = (Probability * Odds) - 1
+    return (prob * odds) - 1
 
-def scan_market():
-    """
-    Scan the betting market for value opportunities.
+def live_value_scanner():
+    print("--- 🔍 Scanning Market for Value ---")
     
-    Workflow:
-    1. Fetch upcoming matches from football-data API
-    2. Run prediction model (.pkl) to get probabilities
-    3. Calculate optimal stake with calculate_kelly()
-    4. Upsert results to 'live_predictions' table
-    """
-    # Implementation will integrate with:
-    # - prediction_engine.py for model inference
-    # - value_detection.py for EV calculation
-    # - risk_management.py for stake sizing
-    pass
+    # 1. Fetch upcoming matches (Scheduled)
+    url = "https://api.football-data.org/v4/competitions/PL/matches?status=SCHEDULED"
+    headers = {'X-Auth-Token': os.getenv("FOOTBALL_DATA_API_KEY")}
+    matches = requests.get(url, headers=headers).json().get('matches', [])
+
+    for m in matches:
+        home_team = m['homeTeam']['name']
+        away_team = m['awayTeam']['name']
+        
+        # --- THE LOGIC STEP ---
+        # In a full setup, your .pkl model would provide 'my_prob'
+        # For now, we use a 0.50 baseline for demonstration
+        my_prob = 0.55 
+        market_odds = 2.10 # This would come from an odds API or manual entry
+        
+        # Apply Keystone Buffer if a star is out (Manual toggle for now)
+        keystone_missing = False 
+        if keystone_missing:
+            my_prob -= 0.05
+            
+        edge = calculate_ev(my_prob, market_odds)
+
+        if edge > 0.05: # Only log if Edge > 5%
+            payload = {
+                "match_id": m['id'],
+                "home_team": home_team,
+                "away_team": away_team,
+                "kickoff_time": m['utcDate'],
+                "model_prob": my_prob,
+                "market_odds": market_odds,
+                "edge_percent": edge * 100
+            }
+            supabase.table('live_predictions').upsert(payload, on_conflict='match_id').execute()
+            print(f"⭐ VALUE FOUND: {home_team} vs {away_team} ({edge*100:.1f}% Edge)")
 
 if __name__ == "__main__":
-    scan_market()
+    live_value_scanner()

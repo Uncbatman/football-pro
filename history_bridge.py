@@ -65,9 +65,12 @@ def sync_historical_data():
             
             # Upsert prevents duplicates if you run this script twice
             try:
+                # The 'on_conflict' list must match the columns in the SQL constraint we just created
                 supabase.table('historical_stats').upsert(
-                    payload, on_conflict='match_date, home_team_id'
+                    payload, 
+                    on_conflict='match_date, home_team_id' 
                 ).execute()
+                
                 new_records += 1
             except Exception as e:
                 print(f"⚠️ Skip {home_name} vs {away_name}: {e}")
