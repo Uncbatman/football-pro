@@ -3,6 +3,7 @@ import requests
 import time
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from elo_system import update_elo_ratings
 
 # Load credentials from .env
 load_dotenv()
@@ -70,6 +71,10 @@ def sync_historical_data():
                     payload, 
                     on_conflict='match_date, home_team_id' 
                 ).execute()
+                
+                # Update Elo ratings based on match result
+                elo_update = update_elo_ratings(home_id, away_id, winner_letter, supabase)
+                print(f"  📊 Elo Updated: {home_name} {elo_update['elo_change_home']:+.1f} | {away_name} {elo_update['elo_change_away']:+.1f}")
                 
                 new_records += 1
             except Exception as e:

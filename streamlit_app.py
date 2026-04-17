@@ -3,6 +3,866 @@ import pandas as pd
 from supabase import create_client
 import os
 from dotenv import load_dotenv
+from engine import predict_match_probs, get_kelly_stake, calculate_expected_value, adjust_for_elo
+
+load_dotenv()
+
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
+
+st.set_page_config(page_title="🏆 Alpha Intelligence", layout="wide", initial_sidebar_state="collapsed")
+
+if 'bankroll' not in st.session_state:
+    st.session_state.bankroll = 10000.0
+
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+except KeyError:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+st.markdown("""
+<style>
+    .zone-divider { margin: 2rem 0; border-top: 2px solid #ecf0f1; }
+    .intelligence-box { padding: 15px; background-color: #f0f7ff; border-left: 4px solid #3498db; border-radius: 5px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# SIDEBAR: HIDDEN ENGINE ROOM
+# ============================================================================
+
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    keystone_buffer = st.toggle("Keystone Buffer (-5%)", value=False, key="keystone_toggle")
+    min_edge_threshold = st.slider("Min Edge (%)", 0.0, 15.0, 5.0, key="edge_threshold")
+    st.session_state.bankroll = st.number_input("Bankroll (KSh)", value=st.session_state.bankroll, step=100.0, key="bankroll_input")
+
+# ============================================================================
+# ZONE 1: THE SCORECARD (Three Numbers)
+# ============================================================================
+
+st.markdown("## 🎯 Alpha Intelligence")
+st.caption("Focus on the edge. Ignore the noise.")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Total Wealth", f"KSh {st.session_state.bankroll:,.0f}")
+
+with col2:
+    try:
+        if supabase:
+            settled = supabase.table('pending_bets').select("*").eq('status', 'SETTLED').execute()
+            settled_bets = pd.DataFrame(settled.data) if settled.data else pd.DataFrame()
+            if not settled_bets.empty and 'clv_percent' in settled_bets.columns:
+                avg_clv = settled_bets['clv_percent'].mean()
+                st.metric("Market Alpha (CLV)", f"{avg_clv:+.2f}%", help="Closing Line Value Average")
+            else:
+                st.metric("Market Alpha (CLV)", "Pending", help="Settle 5+ bets to see alpha")
+    except:
+        st.metric("Market Alpha (CLV)", "—")
+
+with col3:
+    try:
+        if supabase:
+            pending = supabase.table('pending_bets').select("*").eq('status', 'PENDING').execute()
+            pending_count = len(pending.data) if pending.data else 0
+            st.metric("Active Risk", f"{min(pending_count * 3, 100):.0f}% of capital", help=f"{pending_count} bets in flight")
+    except:
+        st.metric("Active Risk", "—")
+
+st.markdown('<div class="zone-divider"></div>', unsafe_allow_html=True)
+
+# ============================================================================
+# ZONE 2: THE EXECUTIONER (Intelligence Bridge - Automated Poisson)
+# ============================================================================
+
+st.markdown("## ✨ Intelligence Intake")
+st.caption("Two teams, three odds, one decision. Complete in 10 seconds.")
+
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col2:
+    # Fetch teams and Elo ratings
+    teams_list = ["Select Team"]
+    teams_df = None
+    try:
+        if supabase:
+            teams_res = supabase.table('teams').select("*").execute()
+            if teams_res.data:
+                teams_df = pd.DataFrame(teams_res.data)
+                teams_list = sorted([t['team_name'] for t in teams_res.data if t.get('team_name')])
+    except:
+        pass
+    
+    # Input: Teams and Odds
+    col_h, col_a = st.columns(2)
+    with col_h:
+        home_team = st.selectbox("Home Team", teams_list, key="home_select")
+    with col_a:
+        away_team = st.selectbox("Away Team", teams_list, key="away_select")
+    
+    col_h_odds, col_d_odds, col_a_odds = st.columns(3)
+    with col_h_odds:
+        home_odds = st.number_input("Home Odds", value=2.10, min_value=1.01, step=0.05, key="h_odds")
+    with col_d_odds:
+        draw_odds = st.number_input("Draw Odds", value=3.40, min_value=1.01, step=0.05, key="d_odds")
+    with col_a_odds:
+        away_odds = st.number_input("Away Odds", value=3.80, min_value=1.01, step=0.05, key="a_odds")
+    
+    st.divider()
+    
+    # ===== INTELLIGENCE BRIDGE: Automated Poisson Calculation =====
+    if home_team != "Select Team" and away_team != "Select Team" and teams_df is not None:
+        try:
+            # 1. Fetch Elo ratings from Supabase
+            h_data = teams_df[teams_df['team_name'] == home_team].iloc[0]
+            a_data = teams_df[teams_df['team_name'] == away_team].iloc[0]
+            
+            h_elo = float(h_data.get('elo_rating', 1500.0))
+            a_elo = float(a_data.get('elo_rating', 1500.0))
+            
+            # 2. Generate lambdas (expected goals) using Elo adjustment
+            h_lambda = adjust_for_elo(1.5, h_elo, a_elo)  # Home team attacking
+            a_lambda = adjust_for_elo(1.2, a_elo, h_elo)  # Away team attacking
+            
+            # 3. Run Poisson Simulation
+            p_h, p_d, p_a = predict_match_probs(h_lambda, a_lambda)
+            
+            # 4. Apply Keystone Buffer if toggled
+            if keystone_buffer:
+                p_h = max(0, p_h - 0.05)
+                p_d = max(0, p_d - 0.05)
+                p_a = max(0, p_a - 0.05)
+                # Renormalize
+                total = p_h + p_d + p_a
+                if total > 0:
+                    p_h, p_d, p_a = p_h/total, p_d/total, p_a/total
+            
+            # 5. Display Model Intelligence
+            st.markdown("""
+            <div class='intelligence-box'>
+            <strong>🧠 Model Intelligence (Poisson-Elo):</strong><br>
+            Home: <strong>{:.1%}</strong> | Draw: <strong>{:.1%}</strong> | Away: <strong>{:.1%}</strong>
+            </div>
+            """.format(p_h, p_d, p_a), unsafe_allow_html=True)
+            
+            # 6. Calculate EVs automatically (NO sliders needed)
+            ev_h = calculate_expected_value(p_h, home_odds)
+            ev_d = calculate_expected_value(p_d, draw_odds)
+            ev_a = calculate_expected_value(p_a, away_odds)
+            
+            # 7. Find best opportunity
+            bets = [
+                {"outcome": f"{home_team} Win", "odds": home_odds, "ev": ev_h, "prob": p_h},
+                {"outcome": "Draw", "odds": draw_odds, "ev": ev_d, "prob": p_d},
+                {"outcome": f"{away_team} Win", "odds": away_odds, "ev": ev_a, "prob": p_a},
+            ]
+            best = max(bets, key=lambda x: x['ev'])
+            best_edge = best['ev'] * 100
+            
+            st.divider()
+            
+            # 8. Anti-Trade Alert
+            if best_edge < 2.0:
+                st.warning(f"⚠️ **AVOID**: No value. Edge is {best_edge:.1f}%. Walk away.")
+            
+            # 9. Log Trade Button (Only if Edge > Threshold)
+            if best_edge > min_edge_threshold:
+                st.success(f"✅ **EDGE**: {best_edge:.1f}% on {best['outcome']} @ {best['odds']:.2f}")
+                kelly = get_kelly_stake(st.session_state.bankroll, best['prob'], best['odds'])
+                
+                col_btn, col_amt = st.columns([2, 1])
+                with col_btn:
+                    if st.button(f"📊 LOG TRADE: KSh {kelly:,.0f}", use_container_width=True, type="primary"):
+                        try:
+                            if supabase:
+                                payload = {
+                                    "match_id": f"{home_team}_vs_{away_team}",
+                                    "match_date": pd.Timestamp.now().strftime("%Y-%m-%d"),
+                                    "home_team": home_team,
+                                    "away_team": away_team,
+                                    "opening_odds": best['odds'],
+                                    "model_probability": best['prob'],
+                                    "edge_percent": best_edge,
+                                    "status": "PENDING"
+                                }
+                                supabase.table('pending_bets').upsert(payload, on_conflict='match_id').execute()
+                                st.success(f"✅ Logged! {best['outcome']} @ {best['odds']:.2f}")
+                                st.balloons()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                with col_amt:
+                    st.metric("Stake", f"KSh {kelly:,.0f}")
+            else:
+                st.info(f"📊 Edge {best_edge:.1f}%. Need >{min_edge_threshold:.1f}%. No signal.")
+        
+        except Exception as e:
+            st.info(f"Intelligence Bridge: {str(e)}")
+
+st.markdown('<div class="zone-divider"></div>', unsafe_allow_html=True)
+
+# ============================================================================
+# ZONE 3: THE LEDGER (History in Tabs)
+# ============================================================================
+
+tab1, tab2 = st.tabs(["📊 Pending", "📈 Settled"])
+
+with tab1:
+    st.subheader("Bets In Flight")
+    try:
+        if supabase:
+            pending = supabase.table('pending_bets').select("*").eq('status', 'PENDING').execute()
+            pending_df = pd.DataFrame(pending.data) if pending.data else pd.DataFrame()
+            if not pending_df.empty:
+                st.write(f"**{len(pending_df)} trades waiting for settlement**")
+                for idx, bet in pending_df.iterrows():
+                    with st.container(border=True):
+                        c1, c2, c3 = st.columns([2, 1, 2])
+                        with c1:
+                            st.write(f"**{bet['home_team']} vs {bet['away_team']}**")
+                        with c2:
+                            st.metric("Open", f"{bet['opening_odds']:.2f}")
+                        with c3:
+                            close = st.number_input("Close", value=bet['opening_odds'], step=0.05, key=f"c_{idx}")
+                            result = st.selectbox("Result", ["H", "D", "A"], key=f"r_{idx}")
+                            if st.button("Settle", key=f"s_{idx}", use_container_width=True):
+                                clv = (bet['opening_odds'] / close - 1) * 100
+                                try:
+                                    supabase.table('pending_bets').update({
+                                        "closing_odds": close, "clv_percent": clv, "result": result, "status": "SETTLED"
+                                    }).eq('match_id', bet['match_id']).execute()
+                                    st.success(f"✅ CLV: {clv:+.2f}%")
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+            else:
+                st.info("No pending bets. Log trades using Intelligence Intake above.")
+    except:
+        st.error("Cannot load pending bets")
+
+with tab2:
+    st.subheader("Settled Bets (Alpha History)")
+    try:
+        if supabase:
+            settled = supabase.table('pending_bets').select("*").eq('status', 'SETTLED').execute()
+            settled_df = pd.DataFrame(settled.data) if settled.data else pd.DataFrame()
+            if not settled_df.empty:
+                # ===== THE WEALTH CURVE: Cumulative Alpha Growth =====
+                st.subheader("The Alpha Curve")
+                settled_df_sorted = settled_df.sort_values('match_date')
+                settled_df_sorted['cumulative_clv'] = settled_df_sorted['clv_percent'].cumsum()
+                st.line_chart(settled_df_sorted.set_index('match_date')['cumulative_clv'], use_container_width=True)
+                st.caption("📈 A rising line means you are consistently outsmarting the market.")
+                
+                st.divider()
+                
+                # Display settled bets table
+                cols = ['home_team', 'away_team', 'opening_odds', 'closing_odds', 'clv_percent', 'result']
+                display = settled_df[[c for c in cols if c in settled_df.columns]].copy()
+                display = display.rename(columns={'home_team': 'Home', 'away_team': 'Away', 'opening_odds': 'Open', 'closing_odds': 'Close', 'clv_percent': 'CLV %', 'result': 'Result'})
+                st.dataframe(display, use_container_width=True, hide_index=True)
+                
+                # Summary metrics
+                st.metric("Portfolio Alpha", f"{settled_df['clv_percent'].mean():+.2f}%")
+            else:
+                st.info("No settled bets yet. Settle pending bets to see your Wealth Curve.")
+    except:
+        st.error("Cannot load settled bets")
+
+st.divider()
+st.caption("⚠️ Disclaimer: Betting involves risk. Only bet money you can afford to lose.")
+import streamlit as st
+import pandas as pd
+from supabase import create_client
+import os
+from dotenv import load_dotenv
+from engine import predict_match_probs, get_kelly_stake, calculate_expected_value, adjust_for_elo
+
+load_dotenv()
+
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
+
+st.set_page_config(page_title="🏆 Alpha Intelligence", layout="wide", initial_sidebar_state="collapsed")
+
+if 'bankroll' not in st.session_state:
+    st.session_state.bankroll = 10000.0
+
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+except KeyError:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+st.markdown("""
+<style>
+    .zone-divider { margin: 2rem 0; border-top: 2px solid #ecf0f1; }
+    .intelligence-box { padding: 15px; background-color: #f0f7ff; border-left: 4px solid #3498db; border-radius: 5px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# SIDEBAR: HIDDEN ENGINE ROOM
+# ============================================================================
+
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    keystone_buffer = st.toggle("Keystone Buffer (-5%)", value=False, key="keystone_toggle")
+    min_edge_threshold = st.slider("Min Edge (%)", 0.0, 15.0, 5.0, key="edge_threshold")
+    st.session_state.bankroll = st.number_input("Bankroll (KSh)", value=st.session_state.bankroll, step=100.0, key="bankroll_input")
+
+# ============================================================================
+# ZONE 1: THE SCORECARD (Three Numbers)
+# ============================================================================
+
+st.markdown("## 🎯 Alpha Intelligence")
+st.caption("Focus on the edge. Ignore the noise.")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Total Wealth", f"KSh {st.session_state.bankroll:,.0f}")
+
+with col2:
+    try:
+        if supabase:
+            settled = supabase.table('pending_bets').select("*").eq('status', 'SETTLED').execute()
+            settled_bets = pd.DataFrame(settled.data) if settled.data else pd.DataFrame()
+            if not settled_bets.empty and 'clv_percent' in settled_bets.columns:
+                avg_clv = settled_bets['clv_percent'].mean()
+                st.metric("Market Alpha (CLV)", f"{avg_clv:+.2f}%", help="Closing Line Value Average")
+            else:
+                st.metric("Market Alpha (CLV)", "Pending", help="Settle 5+ bets to see alpha")
+    except:
+        st.metric("Market Alpha (CLV)", "—")
+
+with col3:
+    try:
+        if supabase:
+            pending = supabase.table('pending_bets').select("*").eq('status', 'PENDING').execute()
+            pending_count = len(pending.data) if pending.data else 0
+            st.metric("Active Risk", f"{min(pending_count * 3, 100):.0f}% of capital", help=f"{pending_count} bets in flight")
+    except:
+        st.metric("Active Risk", "—")
+
+st.markdown('<div class="zone-divider"></div>', unsafe_allow_html=True)
+
+# ============================================================================
+# ZONE 2: THE EXECUTIONER (Intelligence Bridge - Automated Poisson)
+# ============================================================================
+
+st.markdown("## ✨ Intelligence Intake")
+st.caption("Two teams, three odds, one decision. Complete in 10 seconds.")
+
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col2:
+    # Fetch teams and Elo ratings
+    teams_list = ["Select Team"]
+    teams_df = None
+    try:
+        if supabase:
+            teams_res = supabase.table('teams').select("*").execute()
+            if teams_res.data:
+                teams_df = pd.DataFrame(teams_res.data)
+                teams_list = sorted([t['team_name'] for t in teams_res.data if t.get('team_name')])
+    except:
+        pass
+    
+    # Input: Teams and Odds
+    col_h, col_a = st.columns(2)
+    with col_h:
+        home_team = st.selectbox("Home Team", teams_list, key="home_select")
+    with col_a:
+        away_team = st.selectbox("Away Team", teams_list, key="away_select")
+    
+    col_h_odds, col_d_odds, col_a_odds = st.columns(3)
+    with col_h_odds:
+        home_odds = st.number_input("Home Odds", value=2.10, min_value=1.01, step=0.05, key="h_odds")
+    with col_d_odds:
+        draw_odds = st.number_input("Draw Odds", value=3.40, min_value=1.01, step=0.05, key="d_odds")
+    with col_a_odds:
+        away_odds = st.number_input("Away Odds", value=3.80, min_value=1.01, step=0.05, key="a_odds")
+    
+    st.divider()
+    
+    # ===== INTELLIGENCE BRIDGE: Automated Poisson Calculation =====
+    if home_team != "Select Team" and away_team != "Select Team" and teams_df is not None:
+        try:
+            # 1. Fetch Elo ratings from Supabase
+            h_data = teams_df[teams_df['team_name'] == home_team].iloc[0]
+            a_data = teams_df[teams_df['team_name'] == away_team].iloc[0]
+            
+            h_elo = float(h_data.get('elo_rating', 1500.0))
+            a_elo = float(a_data.get('elo_rating', 1500.0))
+            
+            # 2. Generate lambdas (expected goals) using Elo adjustment
+            h_lambda = adjust_for_elo(1.5, h_elo, a_elo)  # Home team attacking
+            a_lambda = adjust_for_elo(1.2, a_elo, h_elo)  # Away team attacking
+            
+            # 3. Run Poisson Simulation
+            p_h, p_d, p_a = predict_match_probs(h_lambda, a_lambda)
+            
+            # 4. Apply Keystone Buffer if toggled
+            if keystone_buffer:
+                p_h = max(0, p_h - 0.05)
+                p_d = max(0, p_d - 0.05)
+                p_a = max(0, p_a - 0.05)
+                # Renormalize
+                total = p_h + p_d + p_a
+                if total > 0:
+                    p_h, p_d, p_a = p_h/total, p_d/total, p_a/total
+            
+            # 5. Display Model Intelligence
+            st.markdown("""
+            <div class='intelligence-box'>
+            <strong>🧠 Model Intelligence (Poisson-Elo):</strong><br>
+            Home: <strong>{:.1%}</strong> | Draw: <strong>{:.1%}</strong> | Away: <strong>{:.1%}</strong>
+            </div>
+            """.format(p_h, p_d, p_a), unsafe_allow_html=True)
+            
+            # 6. Calculate EVs automatically (NO sliders needed)
+            ev_h = calculate_expected_value(p_h, home_odds)
+            ev_d = calculate_expected_value(p_d, draw_odds)
+            ev_a = calculate_expected_value(p_a, away_odds)
+            
+            # 7. Find best opportunity
+            bets = [
+                {"outcome": f"{home_team} Win", "odds": home_odds, "ev": ev_h, "prob": p_h},
+                {"outcome": "Draw", "odds": draw_odds, "ev": ev_d, "prob": p_d},
+                {"outcome": f"{away_team} Win", "odds": away_odds, "ev": ev_a, "prob": p_a},
+            ]
+            best = max(bets, key=lambda x: x['ev'])
+            best_edge = best['ev'] * 100
+            
+            st.divider()
+            
+            # 8. Anti-Trade Alert
+            if best_edge < 2.0:
+                st.warning(f"⚠️ **AVOID**: No value. Edge is {best_edge:.1f}%. Walk away.")
+            
+            # 9. Log Trade Button (Only if Edge > Threshold)
+            if best_edge > min_edge_threshold:
+                st.success(f"✅ **EDGE**: {best_edge:.1f}% on {best['outcome']} @ {best['odds']:.2f}")
+                kelly = get_kelly_stake(st.session_state.bankroll, best['prob'], best['odds'])
+                
+                col_btn, col_amt = st.columns([2, 1])
+                with col_btn:
+                    if st.button(f"📊 LOG TRADE: KSh {kelly:,.0f}", use_container_width=True, type="primary"):
+                        try:
+                            if supabase:
+                                payload = {
+                                    "match_id": f"{home_team}_vs_{away_team}",
+                                    "match_date": pd.Timestamp.now().strftime("%Y-%m-%d"),
+                                    "home_team": home_team,
+                                    "away_team": away_team,
+                                    "opening_odds": best['odds'],
+                                    "model_probability": best['prob'],
+                                    "edge_percent": best_edge,
+                                    "status": "PENDING"
+                                }
+                                supabase.table('pending_bets').upsert(payload, on_conflict='match_id').execute()
+                                st.success(f"✅ Logged! {best['outcome']} @ {best['odds']:.2f}")
+                                st.balloons()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                with col_amt:
+                    st.metric("Stake", f"KSh {kelly:,.0f}")
+            else:
+                st.info(f"📊 Edge {best_edge:.1f}%. Need >{min_edge_threshold:.1f}%. No signal.")
+        
+        except Exception as e:
+            st.info(f"Intelligence Bridge: {str(e)}")
+
+st.markdown('<div class="zone-divider"></div>', unsafe_allow_html=True)
+
+# ============================================================================
+# ZONE 3: THE LEDGER (History in Tabs)
+# ============================================================================
+
+tab1, tab2 = st.tabs(["📊 Pending", "📈 Settled"])
+
+with tab1:
+    st.subheader("Bets In Flight")
+    try:
+        if supabase:
+            pending = supabase.table('pending_bets').select("*").eq('status', 'PENDING').execute()
+            pending_df = pd.DataFrame(pending.data) if pending.data else pd.DataFrame()
+            if not pending_df.empty:
+                st.write(f"**{len(pending_df)} trades waiting for settlement**")
+                for idx, bet in pending_df.iterrows():
+                    with st.container(border=True):
+                        c1, c2, c3 = st.columns([2, 1, 2])
+                        with c1:
+                            st.write(f"**{bet['home_team']} vs {bet['away_team']}**")
+                        with c2:
+                            st.metric("Open", f"{bet['opening_odds']:.2f}")
+                        with c3:
+                            close = st.number_input("Close", value=bet['opening_odds'], step=0.05, key=f"c_{idx}")
+                            result = st.selectbox("Result", ["H", "D", "A"], key=f"r_{idx}")
+                            if st.button("Settle", key=f"s_{idx}", use_container_width=True):
+                                clv = (bet['opening_odds'] / close - 1) * 100
+                                try:
+                                    supabase.table('pending_bets').update({
+                                        "closing_odds": close, "clv_percent": clv, "result": result, "status": "SETTLED"
+                                    }).eq('match_id', bet['match_id']).execute()
+                                    st.success(f"✅ CLV: {clv:+.2f}%")
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+            else:
+                st.info("No pending bets. Log trades using Intelligence Intake above.")
+    except:
+        st.error("Cannot load pending bets")
+
+with tab2:
+    st.subheader("Settled Bets (Alpha History)")
+    try:
+        if supabase:
+            settled = supabase.table('pending_bets').select("*").eq('status', 'SETTLED').execute()
+            settled_df = pd.DataFrame(settled.data) if settled.data else pd.DataFrame()
+            if not settled_df.empty:
+                # ===== THE WEALTH CURVE: Cumulative Alpha Growth =====
+                st.subheader("The Alpha Curve")
+                settled_df_sorted = settled_df.sort_values('match_date')
+                settled_df_sorted['cumulative_clv'] = settled_df_sorted['clv_percent'].cumsum()
+                st.line_chart(settled_df_sorted.set_index('match_date')['cumulative_clv'], use_container_width=True)
+                st.caption("📈 A rising line means you are consistently outsmarting the market.")
+                
+                st.divider()
+                
+                # Display settled bets table
+                cols = ['home_team', 'away_team', 'opening_odds', 'closing_odds', 'clv_percent', 'result']
+                display = settled_df[[c for c in cols if c in settled_df.columns]].copy()
+                display = display.rename(columns={'home_team': 'Home', 'away_team': 'Away', 'opening_odds': 'Open', 'closing_odds': 'Close', 'clv_percent': 'CLV %', 'result': 'Result'})
+                st.dataframe(display, use_container_width=True, hide_index=True)
+                
+                # Summary metrics
+                st.metric("Portfolio Alpha", f"{settled_df['clv_percent'].mean():+.2f}%")
+            else:
+                st.info("No settled bets yet. Settle pending bets to see your Wealth Curve.")
+    except:
+        st.error("Cannot load settled bets")
+
+st.divider()
+st.caption("⚠️ Disclaimer: Betting involves risk. Only bet money you can afford to lose.")
+import streamlit as st
+import pandas as pd
+from supabase import create_client
+import os
+from dotenv import load_dotenv
+from elo_system import get_adjusted_lambdas
+
+# Load environment variables
+load_dotenv()
+
+# ============================================================================
+# SESSION STATE INITIALIZATION
+# ============================================================================
+
+if 'bankroll' not in st.session_state:
+    st.session_state.bankroll = 1000.0
+
+if 'min_edge' not in st.session_state:
+    st.session_state.min_edge = 5.0
+
+# ============================================================================
+# PAGE CONFIG (Jobsian Minimalism)
+# ============================================================================
+
+st.set_page_config(
+    page_title="Football-Pro Cockpit",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .metric-value { font-size: 2.5rem; font-weight: bold; color: #2ecc71; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# SUPABASE CONNECTION
+# ============================================================================
+
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+except KeyError:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
+    st.error("❌ Supabase credentials not found. Check .env or Streamlit Secrets.")
+
+# ============================================================================
+# SIDEBAR: ENGINE ROOM
+# ============================================================================
+
+with st.sidebar:
+    st.header("⚙️ System Health")
+    keystone_buffer = st.toggle("Apply Keystone Variance Buffer (-5%)", value=False, key="keystone_toggle")
+    min_edge = st.slider("Minimum Edge Threshold (%)", 0.0, 15.0, 5.0, key="edge_threshold")
+    
+    st.session_state.bankroll = st.number_input(
+        "Total Bankroll (Ksh)", 
+        value=st.session_state.bankroll,
+        step=100.0,
+        key="bankroll_input"
+    )
+
+# ============================================================================
+# MAIN HEADER
+# ============================================================================
+
+st.title("🏆 Football-Pro Alpha")
+
+# ============================================================================
+# TAB 1: 🎯 FIND - Opportunity Discovery & Trade Logging
+# ============================================================================
+
+tab1, tab2, tab3 = st.tabs(["🎯 Find", "✅ Settle", "📊 Review"])
+
+with tab1:
+    if supabase:
+        try:
+            res = supabase.table('live_predictions').select("*").execute()
+            df = pd.DataFrame(res.data)
+            
+            if not df.empty:
+                # Apply UI Filtering
+                if keystone_buffer:
+                    df['edge_percent'] = df['edge_percent'] - 5.0
+                
+                top_bets = df[df['edge_percent'] >= min_edge].sort_values('edge_percent', ascending=False)
+
+                # Top Row: Three Key Metrics
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    top_edge = df['edge_percent'].max()
+                    st.metric("Top Edge Found", f"{top_edge:.1f}%")
+                
+                with col2:
+                    active_count = len(top_bets)
+                    st.metric("Active Opportunities", active_count)
+                
+                with col3:
+                    # Get win rate from settled bets
+                    try:
+                        settled_res = supabase.table('pending_bets').select("*").eq('status', 'SETTLED').execute()
+                        settled_bets = pd.DataFrame(settled_res.data) if settled_res.data else pd.DataFrame()
+                        
+                        if not settled_bets.empty:
+                            win_count = len(settled_bets[settled_bets['clv_percent'] > 0])
+                            win_rate = (win_count / len(settled_bets)) * 100
+                            st.metric("Your Win Rate", f"{win_rate:.0f}%")
+                        else:
+                            st.metric("Your Win Rate", "N/A", help="Settle 5+ bets to see your rate")
+                    except:
+                        st.metric("Your Win Rate", "N/A", help="Settle 5+ bets to see your rate")
+
+                st.divider()
+
+                # Action List
+                if top_bets.empty:
+                    st.info("No high-value opportunities detected. The market is currently efficient.")
+                else:
+                    st.subheader("🔥 High-Value Targets")
+                    for index, row in top_bets.iterrows():
+                        with st.container(border=True):
+                            c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+                            with c1:
+                                st.write(f"**{row['home_team']} vs {row['away_team']}**")
+                                st.caption(f"Kickoff: {row['kickoff_time']}")
+                            with c2:
+                                st.write(f"Edge: **{row['edge_percent']:.1f}%**")
+                            with c3:
+                                st.write(f"Odds: **{row['market_odds']:.2f}**")
+                            with c4:
+                                if st.button("Log Trade", key=row['match_id']):
+                                    trade_payload = {
+                                        "match_id": row['match_id'],
+                                        "match_date": row['kickoff_time'].split('T')[0] if isinstance(row['kickoff_time'], str) else str(row['kickoff_time']),
+                                        "home_team": row['home_team'],
+                                        "away_team": row['away_team'],
+                                        "opening_odds": row['market_odds'],
+                                        "model_probability": row['model_prob'],
+                                        "edge_percent": row['edge_percent'],
+                                        "status": "PENDING"
+                                    }
+                                    try:
+                                        supabase.table('pending_bets').upsert(trade_payload, on_conflict='match_id').execute()
+                                        st.success(f"✅ Trade Logged at {row['market_odds']:.2f}! Alpha tracking initiated.")
+                                    except Exception as e:
+                                        st.error(f"❌ Error logging trade: {e}")
+            else:
+                st.warning("Database empty. Run the Live Scanner Action to populate.")
+        
+        except Exception as e:
+            st.error(f"❌ Error fetching live predictions: {str(e)}")
+    else:
+        st.error("❌ Cannot connect to Supabase. Check configuration.")
+
+# ============================================================================
+# TAB 2: ✅ SETTLE - Manual Settlement & CLV Entry
+# ============================================================================
+
+with tab2:
+    if supabase:
+        try:
+            pending_res = supabase.table('pending_bets').select("*").eq('status', 'PENDING').execute()
+            pending_bets = pd.DataFrame(pending_res.data) if pending_res.data else pd.DataFrame()
+            
+            if not pending_bets.empty:
+                st.write(f"**{len(pending_bets)} active trades awaiting settlement**")
+                
+                for idx, bet in pending_bets.iterrows():
+                    with st.container(border=True):
+                        col1, col2, col3 = st.columns([2, 2, 2])
+                        
+                        with col1:
+                            st.write(f"**{bet['home_team']} vs {bet['away_team']}**")
+                            st.caption(f"Match Date: {bet['match_date']}")
+                        
+                        with col2:
+                            st.metric("Opening Odds", f"{bet['opening_odds']:.2f}")
+                            st.caption(f"Edge: {bet['edge_percent']:.1f}%")
+                        
+                        with col3:
+                            st.write("**Settle this bet:**")
+                            
+                            closing_odds = st.number_input(
+                                "Closing Odds",
+                                value=bet['opening_odds'],
+                                step=0.05,
+                                key=f"closing_{bet['match_id']}"
+                            )
+                            
+                            final_score = st.selectbox(
+                                "Final Score",
+                                ["Home Win", "Draw", "Away Win"],
+                                key=f"score_{bet['match_id']}"
+                            )
+                        
+                        # Settlement button
+                        if st.button("✅ Settle Bet", key=f"settle_{bet['match_id']}", use_container_width=True):
+                            clv = (bet['opening_odds'] / closing_odds - 1) * 100
+                            result_map = {"Home Win": "H", "Draw": "D", "Away Win": "A"}
+                            result = result_map[final_score]
+                            
+                            settlement_payload = {
+                                "closing_odds": closing_odds,
+                                "clv_percent": clv,
+                                "result": result,
+                                "status": "SETTLED"
+                            }
+                            
+                            try:
+                                supabase.table('pending_bets').update(settlement_payload).eq('match_id', bet['match_id']).execute()
+                                
+                                if clv > 0:
+                                    st.success(f"✅ Settled! CLV: **+{clv:.2f}%** (You outsmarted the market!)")
+                                else:
+                                    st.warning(f"⚠️ Settled. CLV: **{clv:.2f}%** (Market moved against you)")
+                            except Exception as e:
+                                st.error(f"❌ Settlement failed: {e}")
+            
+            else:
+                st.info("📊 No pending bets. Start logging trades from the 🎯 Find tab!")
+        
+        except Exception as e:
+            st.error(f"❌ Error loading pending bets: {str(e)}")
+
+# ============================================================================
+# TAB 3: 📊 REVIEW - Portfolio Analytics & Performance
+# ============================================================================
+
+with tab3:
+    if supabase:
+        try:
+            settled_res = supabase.table('pending_bets').select("*").eq('status', 'SETTLED').execute()
+            settled_bets = pd.DataFrame(settled_res.data) if settled_res.data else pd.DataFrame()
+            
+            if not settled_bets.empty and 'clv_percent' in settled_bets.columns:
+                avg_clv = settled_bets['clv_percent'].mean()
+                win_count = len(settled_bets[settled_bets['clv_percent'] > 0])
+                total_count = len(settled_bets)
+                total_clv = settled_bets['clv_percent'].sum()
+                
+                # Key Metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Avg CLV", f"{avg_clv:+.2f}%")
+                with col2:
+                    st.metric("Total CLV", f"{total_clv:+.2f}%")
+                with col3:
+                    st.metric("Winning Bets", f"{win_count}/{total_count}")
+                with col4:
+                    st.metric("Win Rate", f"{win_count/total_count*100:.0f}%")
+                
+                st.divider()
+                
+                # Alpha Status
+                if avg_clv > 2.0:
+                    st.success("🎯 **Alpha Status:** You are statistically guaranteed to be profitable long-term!")
+                elif avg_clv > 0:
+                    st.info("📈 **Alpha Status:** Positive CLV detected. Continue logging and settling.")
+                else:
+                    st.warning("⚠️ **Alpha Status:** Negative CLV. Your local odds may be worse than market average.")
+                
+                st.divider()
+                
+                # CLV Distribution Chart
+                st.subheader("CLV Distribution")
+                st.bar_chart(settled_bets['clv_percent'].value_counts().sort_index())
+                
+                st.divider()
+                
+                # Detailed Settled Bets Table
+                st.subheader("Settled Bets History")
+                display_df = settled_bets[['home_team', 'away_team', 'opening_odds', 'closing_odds', 'clv_percent', 'result']].copy()
+                display_df = display_df.rename(columns={
+                    'home_team': 'Home',
+                    'away_team': 'Away',
+                    'opening_odds': 'Open Odds',
+                    'closing_odds': 'Close Odds',
+                    'clv_percent': 'CLV %',
+                    'result': 'Result'
+                })
+                st.dataframe(display_df, use_container_width=True)
+            
+            else:
+                st.info("📊 No settled bets yet. Settle 5-10 bets from the ✅ Settle tab to see analytics.")
+        
+        except Exception as e:
+            st.error(f"❌ Error loading analytics: {str(e)}")
+
+# ============================================================================
+# FOOTER
+# ============================================================================
+
+st.divider()
+st.caption("⚠️ Disclaimer: Betting involves risk. Only bet money you can afford to lose. Football-Pro provides analytical tools, not financial advice.")
+import streamlit as st
+import pandas as pd
+from supabase import create_client
+import os
+from dotenv import load_dotenv
+from elo_system import get_adjusted_lambdas
 
 # Load environment variables
 load_dotenv()
@@ -57,6 +917,13 @@ with st.sidebar:
     st.header("⚙️ System Health")
     keystone_buffer = st.toggle("Apply Keystone Variance Buffer (-5%)", value=False)
     min_edge = st.slider("Minimum Edge Threshold (%)", 0.0, 15.0, 5.0)
+    
+    # In your Sidebar or Settings
+    st.session_state.bankroll = st.number_input(
+        "Total Bankroll ($)", 
+        value=st.session_state.bankroll,
+        step=100.0
+    )
 
 # ============================================================================
 # MAIN DASHBOARD: THE "COCKPIT"
@@ -113,15 +980,32 @@ if supabase:
                 st.subheader("🔥 High-Value Targets")
                 for index, row in top_bets.iterrows():
                     with st.container(border=True):
-                        c1, c2, c3 = st.columns([2, 1, 1])
+                        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
                         with c1:
                             st.write(f"**{row['home_team']} vs {row['away_team']}**")
                             st.caption(f"Kickoff: {row['kickoff_time']}")
                         with c2:
                             st.write(f"Edge: **{row['edge_percent']:.1f}%**")
                         with c3:
+                            st.write(f"Odds: **{row['market_odds']:.2f}**")
+                        with c4:
                             if st.button("Log Trade", key=row['match_id']):
-                                st.success("Trade Logged!")
+                                # Capture opening odds and log to pending_bets
+                                trade_payload = {
+                                    "match_id": row['match_id'],
+                                    "match_date": row['kickoff_time'].split('T')[0] if isinstance(row['kickoff_time'], str) else str(row['kickoff_time']),
+                                    "home_team": row['home_team'],
+                                    "away_team": row['away_team'],
+                                    "opening_odds": row['market_odds'],
+                                    "model_probability": row['model_prob'],
+                                    "edge_percent": row['edge_percent'],
+                                    "status": "PENDING"
+                                }
+                                try:
+                                    supabase.table('pending_bets').upsert(trade_payload, on_conflict='match_id').execute()
+                                    st.success(f"✅ Trade Logged at {row['market_odds']:.2f}! Alpha tracking initiated.")
+                                except Exception as e:
+                                    st.error(f"❌ Error logging trade: {e}")
         else:
             st.warning("Database empty. Run the Live Scanner Action to populate.")
     
@@ -129,6 +1013,113 @@ if supabase:
         st.error(f"❌ Error fetching live predictions: {str(e)}")
 else:
     st.error("❌ Cannot connect to Supabase. Check configuration.")
+
+# ============================================================================
+# PENDING BETS: "Settle" Interface - The Wealth Ledger
+# ============================================================================
+
+st.markdown("---")
+st.title("📋 Pending Bets - Settlement Ledger")
+
+if supabase:
+    try:
+        # Fetch pending bets
+        pending_res = supabase.table('pending_bets').select("*").eq('status', 'PENDING').execute()
+        pending_bets = pd.DataFrame(pending_res.data) if pending_res.data else pd.DataFrame()
+        
+        if not pending_bets.empty:
+            st.write(f"**{len(pending_bets)} active trades awaiting settlement**")
+            
+            for idx, bet in pending_bets.iterrows():
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([2, 2, 2])
+                    
+                    with col1:
+                        st.write(f"**{bet['home_team']} vs {bet['away_team']}**")
+                        st.caption(f"Match Date: {bet['match_date']}")
+                    
+                    with col2:
+                        st.metric("Opening Odds", f"{bet['opening_odds']:.2f}")
+                        st.caption(f"Edge: {bet['edge_percent']:.1f}%")
+                    
+                    with col3:
+                        st.write("**Settle this bet:**")
+                        
+                        closing_odds = st.number_input(
+                            "Closing Odds",
+                            value=bet['opening_odds'],
+                            step=0.05,
+                            key=f"closing_{bet['match_id']}"
+                        )
+                        
+                        final_score = st.selectbox(
+                            "Final Score",
+                            ["Home Win", "Draw", "Away Win"],
+                            key=f"score_{bet['match_id']}"
+                        )
+                    
+                    # Settlement button
+                    if st.button("✅ Settle Bet", key=f"settle_{bet['match_id']}", use_container_width=True):
+                        # Calculate CLV
+                        clv = (bet['opening_odds'] / closing_odds - 1) * 100
+                        
+                        # Map result to 'H', 'D', 'A'
+                        result_map = {"Home Win": "H", "Draw": "D", "Away Win": "A"}
+                        result = result_map[final_score]
+                        
+                        # Update pending_bets record
+                        settlement_payload = {
+                            "closing_odds": closing_odds,
+                            "clv_percent": clv,
+                            "result": result,
+                            "status": "SETTLED"
+                        }
+                        
+                        try:
+                            supabase.table('pending_bets').update(settlement_payload).eq('match_id', bet['match_id']).execute()
+                            
+                            # Show CLV result
+                            if clv > 0:
+                                st.success(f"✅ Settled! CLV: **+{clv:.2f}%** (You outsmarted the market!)")
+                            else:
+                                st.warning(f"⚠️ Settled. CLV: **{clv:.2f}%** (Market moved against you)")
+                        except Exception as e:
+                            st.error(f"❌ Settlement failed: {e}")
+        
+        else:
+            st.info("📊 No pending bets. Start logging trades from the Cockpit above!")
+        
+        # ===== CLV Analytics =====
+        st.divider()
+        st.subheader("📈 Portfolio Market Alpha (CLV)")
+        
+        settled_res = supabase.table('pending_bets').select("*").eq('status', 'SETTLED').execute()
+        settled_bets = pd.DataFrame(settled_res.data) if settled_res.data else pd.DataFrame()
+        
+        if not settled_bets.empty and 'clv_percent' in settled_bets.columns:
+            avg_clv = settled_bets['clv_percent'].mean()
+            win_count = len(settled_bets[settled_bets['clv_percent'] > 0])
+            total_count = len(settled_bets)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Avg CLV", f"{avg_clv:+.2f}%")
+            with col2:
+                st.metric("Winning Bets", f"{win_count}/{total_count}")
+            with col3:
+                st.metric("Win Rate", f"{win_count/total_count*100:.0f}%")
+            
+            if avg_clv > 2.0:
+                st.success("🎯 **Alpha Status:** You are statistically guaranteed to be profitable long-term!")
+            elif avg_clv > 0:
+                st.info("📈 **Alpha Status:** Positive CLV detected. Continue logging and settling.")
+            else:
+                st.warning("⚠️ **Alpha Status:** Negative CLV. Your Odibets odds may be worse than market average.")
+        else:
+            st.info("Settle at least 5-10 bets to see CLV statistics.")
+    
+    except Exception as e:
+        st.error(f"❌ Error loading pending bets: {str(e)}")
 
 st.markdown("---")
 st.caption("⚠️ Disclaimer: Betting involves risk. Only bet money you can afford to lose. Football-Pro provides analytical tools, not financial advice.")
@@ -834,17 +1825,16 @@ class Match:
         self.away_odds = float(away_odds) if away_odds else 3.8
 
 
-def get_team_stats(team_name, teams_table, stats_records):
+def get_team_stats(team_name, supabase):
     """
-    Fetches team stats from Airtable.
+    Fetches team stats from Supabase.
     
     If team is missing or has insufficient history, returns League Averages
     (1.35 scored, 1.35 conceded).
     
     Args:
         team_name (str): Name of the team
-        teams_table (list): Team records from Airtable
-        stats_records (list): Match statistics from Airtable
+        supabase: Supabase client instance
         
     Returns:
         tuple: (avg_scored, avg_conceded)
@@ -853,31 +1843,32 @@ def get_team_stats(team_name, teams_table, stats_records):
     LEAGUE_AVG_CONCEDED = 1.35
 
     try:
-        # Find the Airtable ID for the team name (case-insensitive)
-        team_id = next(
-            (r['id'] for r in teams_table 
-             if r['fields'].get('Team Name', '').lower() == team_name.lower()), 
-            None
-        )
+        # Query teams table to find the team
+        teams_res = supabase.table('teams').select("id, team_name").eq('team_name', team_name).execute()
         
-        if not team_id:
+        if not teams_res.data:
             return LEAGUE_AVG_SCORED, LEAGUE_AVG_CONCEDED
+        
+        team_id = teams_res.data[0]['id']
+        
+        # Query historical_stats for matches involving this team
+        stats_res = supabase.table('historical_stats').select("*").execute()
+        stats_data = stats_res.data if stats_res.data else []
         
         relevant_matches = []
         
-        for r in stats_records:
-            f = r['fields']
+        for match in stats_data:
             # Home matches
-            if team_id in f.get('Home Team', []):
+            if match.get('home_team_id') == team_id:
                 relevant_matches.append({
-                    'scored': f.get('Home Goals', 0), 
-                    'conceded': f.get('Away Goals', 0)
+                    'scored': match.get('home_goals', 0), 
+                    'conceded': match.get('away_goals', 0)
                 })
             # Away matches
-            elif team_id in f.get('Away Team', []):
+            elif match.get('away_team_id') == team_id:
                 relevant_matches.append({
-                    'scored': f.get('Away Goals', 0), 
-                    'conceded': f.get('Home Goals', 0)
+                    'scored': match.get('away_goals', 0), 
+                    'conceded': match.get('home_goals', 0)
                 })
         
         # Require at least 2 matches for reliable average
@@ -892,6 +1883,7 @@ def get_team_stats(team_name, teams_table, stats_records):
     except Exception as e:
         st.sidebar.warning(f"Using default stats for {team_name} due to data gap.")
         return LEAGUE_AVG_SCORED, LEAGUE_AVG_CONCEDED
+
 
 
 def get_mock_market_odds(home_team: str = None, away_team: str = None) -> dict:
@@ -965,12 +1957,12 @@ with st.sidebar:
     with col2:
         st.metric("Bets Placed", stats['total_bets'])
 
-# Fetch data from Airtable
-teams_table = target_table.all()
-stats_records = target_table.all()
+# Fetch data from Supabase
+res = supabase.table('teams').select("*").execute()
+teams_list = res.data  # This gives you a list of your teams
 team_names = sorted(
-    [r["fields"]["Team Name"] for r in teams_table 
-     if "Team Name" in r["fields"]]
+    [t.get("team_name", "") for t in teams_list 
+     if t.get("team_name")]
 )
 
 # ============================================================================
@@ -997,8 +1989,8 @@ with tab1:
         st.divider()
         
         # Step 1: Get team statistics
-        home_avg_scored, _ = get_team_stats(home_team, teams_table, stats_records)
-        _, away_avg_conceded = get_team_stats(away_team, teams_table, stats_records)
+        home_avg_scored, _ = get_team_stats(home_team, supabase)
+        _, away_avg_conceded = get_team_stats(away_team, supabase)
         
         # Step 2: Get predictions
         predictions = prediction_engine.predict_match(home_avg_scored, away_avg_conceded)
@@ -1189,8 +2181,8 @@ with tab2:
                     
                     for match in matches:
                         # Get team stats
-                        h_scored, _ = get_team_stats(match.home_team, teams_table, stats_records)
-                        _, a_conceded = get_team_stats(match.away_team, teams_table, stats_records)
+                        h_scored, _ = get_team_stats(match.home_team, supabase)
+                        _, a_conceded = get_team_stats(match.away_team, supabase)
                         
                         # Get predictions
                         predictions = prediction_engine.predict_match(h_scored, a_conceded)

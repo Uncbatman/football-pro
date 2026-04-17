@@ -108,6 +108,51 @@ class PredictionEngine:
         """
         # Future: Calculate based on training accuracy, recency, etc.
         return 1.0
+    
+    def get_elo_adjusted_prediction(
+        self,
+        home_avg_goals: float,
+        away_avg_goals: float,
+        home_elo: float,
+        away_elo: float
+    ) -> Dict[str, float]:
+        """
+        Generate Elo-adjusted probability predictions.
+        
+        Adjusts base goal-scoring rates based on team strength (Elo difference)
+        before passing to the Poisson model.
+        
+        Args:
+            home_avg_goals: Home team's average goals scored
+            away_avg_goals: Away team's average goals scored
+            home_elo: Home team's current Elo rating
+            away_elo: Away team's current Elo rating
+        
+        Returns:
+            Dictionary with Elo-adjusted probabilities:
+            {
+                'draw': float (0-1),
+                'home_win': float (0-1),
+                'away_win': float (0-1)
+            }
+        
+        Logic:
+            1. Calculate Elo-adjusted lambdas
+            2. Pass adjusted lambdas to base prediction model
+            3. Return probabilities reflecting strength difference
+        """
+        from elo_system import get_adjusted_lambdas
+        
+        # Get Elo-adjusted goal-scoring rates
+        home_lambda_adj, away_lambda_adj = get_adjusted_lambdas(
+            home_avg_goals, 
+            away_avg_goals, 
+            home_elo, 
+            away_elo
+        )
+        
+        # Use adjusted lambdas for prediction
+        return self.predict_match(home_lambda_adj, away_lambda_adj)
 
 
 class PredictionCache:
